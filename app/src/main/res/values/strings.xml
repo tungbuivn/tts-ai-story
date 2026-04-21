@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TTS AI Story</string>
+    <string name="intent_label_save_text">TTS AI Story</string>
+    <string name="tts_export_notif_channel">Xuất AAC</string>
+    <string name="tts_export_notif_channel_complete">Hoàn tất xuất AAC</string>
+    <string name="tts_export_notif_progress_title">Đang xuất AAC (.m4a)</string>
+    <string name="tts_export_notif_action_cancel">Hủy</string>
+    <string name="tts_export_notif_complete_title">Đã xuất AAC</string>
+    <string name="tts_export_notif_complete_text">Đã lưu: %1$s</string>
+    <string name="tts_export_notif_error_title">Lỗi xuất AAC</string>
+</resources>
