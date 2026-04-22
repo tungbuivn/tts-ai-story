@@ -51,7 +51,7 @@ import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.elevenlabs.ElevenLabsPrefKeys
 import com.ttsaistory.app.model.LibraryCategoryToolbarCommand
 import com.ttsaistory.app.model.TextTabSpeechEngine
-import com.ttsaistory.app.ui.library.DialogOnlineDomainParsersManage
+import com.ttsaistory.app.ui.DialogOnlineDomainParsersManage
 import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.library.LibraryTab
 import com.ttsaistory.app.ui.reader.MainBottomBar

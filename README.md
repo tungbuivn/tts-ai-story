@@ -122,7 +122,7 @@ Cài file APK debug sinh ra dưới `app/build/outputs/apk/debug/`.
 ## Ghi chú cho dev
 
 - UI chính: `AppTabs.kt` → `AppModalNavigationDrawerScaffold.kt` (drawer + scaffold + tab), `ReaderTab.kt`, `LibraryTab.kt`.
-- Parser online theo domain: bảng `online_domain_parsers` (migration DB), `StoryLibraryRepository` (`listOnlineDomainParsers`, `upsertOnlineDomainParser`, …), `DialogOnlineDomainParsersManage.kt` (drawer), `LibraryOnlineCategoryUrl.kt` (`normalizedOnlineParserDomainKey`, …). WebView `LibraryOnlineCategoryWebViewScreen` đã gỡ.
+- Parser online theo domain: bảng `online_domain_parsers` (migration DB), `StoryLibraryRepository` (`listOnlineDomainParsers`, `upsertOnlineDomainParser`, …), `ui/DialogOnlineDomainParsersManage.kt` (drawer), `LibraryOnlineCategoryUrl.kt` (`normalizedOnlineParserDomainKey`, …). WebView `LibraryOnlineCategoryWebViewScreen` đã gỡ.
 - Chuẩn hóa đoạn/câu: `ParagraphTextService.kt`.
 - Thư viện / DB: `StoryLibraryRepository.kt`.
 - Intent chia sẻ / VIEW: xử lý trong `MainActivity` / `AppTabs.kt` (consumer, coroutine, v.v.).

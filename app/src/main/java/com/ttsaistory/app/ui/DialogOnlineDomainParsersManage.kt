@@ -1,6 +1,10 @@
-package com.ttsaistory.app.ui.library
+package com.ttsaistory.app.ui
 
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -39,11 +43,13 @@ import androidx.compose.ui.unit.dp
 import com.ttsaistory.app.data.OnlineDomainParserRow
 import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.data.distinctNormalizedDomainsFromUrlLines
+import com.ttsaistory.app.data.onlineDomainParsersToExportJson
+import com.ttsaistory.app.data.parseOnlineDomainParsersImportJson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Chuẩn hóa xuống dòng (giống [LibraryOnlineSelectorsManageDialog]). */
+/** Chuẩn hóa xuống dòng (giống [com.ttsaistory.app.ui.library.LibraryOnlineSelectorsManageDialog]). */
 private fun normalizeLineBreaksToLf(s: String): String =
     s.replace("\r\n", "\n").replace('\r', '\n').replace('\u2028', '\n').replace('\u2029', '\n')
 
@@ -89,6 +95,73 @@ fun DialogOnlineDomainParsersManage(
         editContentDraft = contentSelectorsToEditorText(e.contentSelectors)
     }
 
+    val activity = ctx as? ComponentActivity
+    val exportLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/json"),
+        ) { uri: Uri? ->
+            if (uri == null || activity == null) return@rememberLauncherForActivityResult
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        val latest = repository.listOnlineDomainParsers()
+                        val json = onlineDomainParsersToExportJson(latest)
+                        activity.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(json.toByteArray(Charsets.UTF_8))
+                        } ?: error("Không ghi được file")
+                    }
+                    Toast.makeText(ctx, "Đã xuất JSON", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        ctx,
+                        e.message ?: "Lỗi xuất file",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+    val importLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.GetContent(),
+        ) { uri: Uri? ->
+            if (uri == null || activity == null) return@rememberLauncherForActivityResult
+            scope.launch {
+                try {
+                    val text =
+                        withContext(Dispatchers.IO) {
+                            activity.contentResolver.openInputStream(uri)?.use { inp ->
+                                inp.readBytes().toString(Charsets.UTF_8)
+                            } ?: error("Không đọc được file")
+                        }
+                    val entries =
+                        withContext(Dispatchers.IO) {
+                            parseOnlineDomainParsersImportJson(text)
+                        }
+                    if (entries.isEmpty()) {
+                        Toast.makeText(ctx, "Không có parser hợp lệ trong file", Toast.LENGTH_LONG).show()
+                        return@launch
+                    }
+                    withContext(Dispatchers.IO) {
+                        for (e in entries) {
+                            repository.upsertOnlineDomainParser(
+                                domainKey = e.domain,
+                                nextPageSelector = e.nextPageSelector,
+                                contentSelectors = e.contentSelectors,
+                            )
+                        }
+                    }
+                    Toast.makeText(ctx, "Đã nhập ${entries.size} parser", Toast.LENGTH_SHORT).show()
+                    listEpoch++
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        ctx,
+                        e.message ?: "Lỗi nhập file",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text("Parser theo domain") },
@@ -106,6 +179,25 @@ fun DialogOnlineDomainParsersManage(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    TextButton(
+                        onClick = {
+                            exportLauncher.launch("tts-ai-story-online-parsers.json")
+                        },
+                        enabled = activity != null && !loading,
+                    ) {
+                        Text("Xuất JSON")
+                    }
+                    TextButton(
+                        onClick = { importLauncher.launch("*/*") },
+                        enabled = activity != null,
+                    ) {
+                        Text("Nhập JSON")
+                    }
+                }
                 if (loading) {
                     Text("Đang tải…", style = MaterialTheme.typography.bodyMedium)
                 } else if (!showCreateForm) {
