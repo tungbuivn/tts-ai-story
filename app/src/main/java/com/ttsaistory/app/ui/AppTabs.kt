@@ -3,6 +3,9 @@ package com.ttsaistory.app.ui
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -45,10 +48,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.ttsaistory.app.AnrDiagLog
 import com.ttsaistory.app.MainActivity
 import com.ttsaistory.app.data.StoryLibraryRepository
-import com.ttsaistory.app.elevenlabs.ElevenLabsConfig
 import com.ttsaistory.app.elevenlabs.ElevenLabsPrefKeys
 import com.ttsaistory.app.elevenlabs.ElevenLabsSettingsScreen
-import com.ttsaistory.app.elevenlabs.ElevenLabsTtsPlayback
 import com.ttsaistory.app.domain.canonicalTextFromRaw
 import com.ttsaistory.app.domain.documentTreeDisplayName
 import com.ttsaistory.app.domain.fetchUrlAsPlainText
@@ -66,7 +67,6 @@ import com.ttsaistory.app.domain.safeCategoryNameFromZipDisplayName
 import com.ttsaistory.app.domain.uriLooksLikeEpubArchive
 import com.ttsaistory.app.domain.uriLooksLikeZipArchive
 import com.ttsaistory.app.domain.shouldTreatViewUriAsTxt
-import com.ttsaistory.app.domain.speakParagraphsSequential
 import com.ttsaistory.app.domain.splitIntoParagraphs
 import com.ttsaistory.app.domain.sanitizeParagraphText
 import com.ttsaistory.app.model.AppEditorConstants
@@ -83,6 +83,11 @@ import com.ttsaistory.app.ui.tab.StoryReadingProgressGlobal
 import com.ttsaistory.app.ui.tab.SystemTtsSettingsScreen
 import com.ttsaistory.app.ui.tab.TextTabBottomNavBridge
 import com.ttsaistory.app.model.saveLastText
+import com.ttsaistory.app.speech.ElevenLabsParagraphSpeechEngine
+import com.ttsaistory.app.speech.ParagraphSpeechEngines
+import com.ttsaistory.app.speech.ParagraphSpeechSequenceCallbacks
+import com.ttsaistory.app.speech.SystemParagraphSpeechEngine
+import com.ttsaistory.app.speech.SystemTtsUtteranceProgressSink
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
@@ -92,7 +97,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -616,6 +620,7 @@ fun AppTabs() {
         )
     }
     var elevenLabsPlayJob by remember { mutableStateOf<Job?>(null) }
+    val latestTextTabSpeechEngine by rememberUpdatedState(textTabSpeechEngine)
 
     DisposableEffect(activity, coroutineScope) {
         val flushCurrentOpenLibraryStoryBeforeInboundImport: suspend () -> Unit = {
@@ -933,6 +938,8 @@ fun AppTabs() {
     var systemTtsStoryUtterancesRemaining by remember { mutableIntStateOf(0) }
     /** Số utterance TTS hệ thống đang phát (preview, đọc truyện) — dùng giữ màn hình vì [TextToSpeech.isSpeaking] không gây recompose. */
     var systemTtsUtteranceDepth by remember { mutableIntStateOf(0) }
+    /** Giữ audio focus khi đọc TTS hệ thống — một số máy tắt màn hình không chuyển đoạn nếu app không có focus. */
+    var systemTtsAudioFocusRequest by remember { mutableStateOf<AudioFocusRequest?>(null) }
 
     DisposableEffect(Unit) {
         val handler = Handler(Looper.getMainLooper())
@@ -1001,7 +1008,7 @@ fun AppTabs() {
     fun persistBookmarkIfSpeaking() {
         val idx = speakingParagraphIndex
         if (idx < 0) return
-        prefs.edit().putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, idx).commit()
+        prefs.edit().putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, idx).apply()
         val sid = latestActiveLibraryStoryId
         if (sid != null) {
             coroutineScope.launch(Dispatchers.IO) {
@@ -1036,7 +1043,9 @@ fun AppTabs() {
     }
 
     val keepScreenOnForVoicePlayback =
-        systemTtsUtteranceDepth > 0 || (elevenLabsPlayJob?.isActive == true)
+        systemTtsUtteranceDepth > 0 ||
+            systemTtsStoryUtterancesRemaining > 0 ||
+            (elevenLabsPlayJob?.isActive == true)
     DisposableEffect(keepScreenOnForVoicePlayback) {
         val window = activity.window
         if (keepScreenOnForVoicePlayback) {
@@ -1051,7 +1060,7 @@ fun AppTabs() {
 
     LaunchedEffect(speakingParagraphIndex, activeLibraryStoryId) {
         if (speakingParagraphIndex >= 0) {
-            prefs.edit().putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, speakingParagraphIndex).commit()
+            prefs.edit().putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, speakingParagraphIndex).apply()
             val sid = activeLibraryStoryId
             if (sid != null) {
                 withContext(Dispatchers.IO) {
@@ -1061,108 +1070,113 @@ fun AppTabs() {
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            elevenLabsPlayJob?.cancel()
+    fun abandonSystemTtsAudioFocus() {
+        val req = systemTtsAudioFocusRequest ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val am = context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.abandonAudioFocusRequest(req)
+        }
+        systemTtsAudioFocusRequest = null
+    }
+
+    val stopAllSpeechReadingRef = remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
+
+    fun requestSystemTtsAudioFocusForPlayback() {
+        abandonSystemTtsAudioFocus()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val am = context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val attrs =
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+        val req =
+            AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener { focusChange ->
+                    when (focusChange) {
+                        AudioManager.AUDIOFOCUS_LOSS,
+                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                        -> {
+                            Handler(Looper.getMainLooper()).post {
+                                stopAllSpeechReadingRef.value?.invoke(true)
+                            }
+                        }
+                    }
+                }
+                .build()
+        if (am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            systemTtsAudioFocusRequest = req
         }
     }
+
+    val systemParagraphSpeechEngine =
+        remember {
+            SystemParagraphSpeechEngine(
+                tts = { tts },
+                requestAudioFocus = { requestSystemTtsAudioFocusForPlayback() },
+                abandonAudioFocus = { abandonSystemTtsAudioFocus() },
+            )
+        }
+    val elevenParagraphSpeechEngine =
+        remember(context, prefs, coroutineScope) {
+            ElevenLabsParagraphSpeechEngine(
+                appContext = context.applicationContext,
+                prefs = prefs,
+                scope = coroutineScope,
+            )
+        }
 
     fun stopAllSpeechReading(persistBookmarkOnStop: Boolean = true) {
         systemTtsStoryUtterancesRemaining = 0
         if (persistBookmarkOnStop) {
             persistBookmarkIfSpeaking()
         }
-        tts?.stop()
+        systemParagraphSpeechEngine.stopPlayback()
+        elevenParagraphSpeechEngine.stopPlayback()
         systemTtsUtteranceDepth = 0
-        elevenLabsPlayJob?.cancel()
         elevenLabsPlayJob = null
         speakingParagraphIndex = -1
     }
 
+    SideEffect {
+        stopAllSpeechReadingRef.value = { persist -> stopAllSpeechReading(persist) }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            elevenLabsPlayJob?.cancel()
+            abandonSystemTtsAudioFocus()
+        }
+    }
+
     fun launchParagraphPlayback(paragraphs: List<String>, startIndex: Int) {
         stopAllSpeechReading(persistBookmarkOnStop = false)
-        when (textTabSpeechEngine) {
-            TextTabSpeechEngine.System -> {
-                val (ok, n) = speakParagraphsSequential(tts, paragraphs, startIndex)
-                if (!ok || n == 0) {
-                    Toast.makeText(
-                        context,
-                        "Không phát được TTS.",
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                } else {
-                    systemTtsStoryUtterancesRemaining = n
-                }
-            }
-            TextTabSpeechEngine.ElevenLabs -> {
-                val key = ElevenLabsPrefKeys.resolveApiKey(prefs)
-                if (key.isEmpty()) {
-                    Toast.makeText(
-                        context,
-                        "Chưa cấu hình API ElevenLabs.",
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                    return
-                }
-                val elJob =
-                    coroutineScope.launch {
-                        val thisPlayJob = coroutineContext.job
-                        var playedAnyParagraph = false
-                        try {
-                            val languageCode: String? =
-                                if (!prefs.contains(ElevenLabsPrefKeys.LANGUAGE_CODE)) {
-                                    ElevenLabsConfig.DEFAULT_LANGUAGE_CODE
-                                } else {
-                                    prefs.getString(ElevenLabsPrefKeys.LANGUAGE_CODE, "")?.trim()
-                                        ?.takeIf { it.isNotEmpty() }
-                                }
-                            val voiceId =
-                                ElevenLabsPrefKeys.resolveVoiceIdForLanguage(prefs, languageCode)
-                            val modelId =
-                                prefs.getString(ElevenLabsPrefKeys.MODEL_ID, null)?.trim()
-                                    ?.takeIf { it.isNotEmpty() }
-                                    ?: ElevenLabsConfig.MODEL_ID
-                            ElevenLabsTtsPlayback.playSequence(
-                                context = context.applicationContext,
-                                paragraphs = paragraphs,
-                                startIndex = startIndex,
-                                apiKey = key,
-                                voiceId = voiceId,
-                                modelId = modelId,
-                                languageCode = languageCode,
-                                onIndex = { idx ->
-                                    playedAnyParagraph = true
-                                    speakingParagraphIndex = idx
-                                },
-                                onFinished = {
-                                    speakingParagraphIndex = -1
-                                },
-                            )
-                            if (playedAnyParagraph &&
-                                latestActiveLibraryStoryId != null &&
-                                textTabSpeechEngine == TextTabSpeechEngine.ElevenLabs
-                            ) {
-                                libraryStoryAutoAdvanceHook.run()
-                            }
-                        } catch (e: CancellationException) {
-                            speakingParagraphIndex = -1
-                            throw e
-                        } catch (e: Exception) {
-                            speakingParagraphIndex = -1
-                            Toast.makeText(
-                                context,
-                                "ElevenLabs: ${e.message ?: e.javaClass.simpleName}",
-                                Toast.LENGTH_LONG,
-                            ).show()
-                        } finally {
-                            if (elevenLabsPlayJob === thisPlayJob) {
-                                elevenLabsPlayJob = null
-                            }
-                        }
+        val speechCallbacks =
+            ParagraphSpeechSequenceCallbacks(
+                onSpeakingParagraphIndex = { speakingParagraphIndex = it },
+                onErrorToast = { msg ->
+                    val len =
+                        if (msg.startsWith("ElevenLabs")) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                    Toast.makeText(context, msg, len).show()
+                },
+                onSystemQueuedUtteranceCount = { systemTtsStoryUtterancesRemaining = it },
+                onElevenLabsJob = { elevenLabsPlayJob = it },
+                onFullSequenceFinishedForLibraryAutoAdvance = {
+                    if (latestActiveLibraryStoryId != null &&
+                        latestTextTabSpeechEngine == TextTabSpeechEngine.ElevenLabs
+                    ) {
+                        libraryStoryAutoAdvanceHook.run()
                     }
-                elevenLabsPlayJob = elJob
-            }
-        }
+                },
+            )
+        ParagraphSpeechEngines
+            .select(
+                textTabSpeechEngine,
+                systemParagraphSpeechEngine,
+                elevenParagraphSpeechEngine,
+            )
+            .startParagraphSequence(paragraphs, startIndex, speechCallbacks)
     }
 
     /** Khi phát hết mọi đoạn của truyện thư viện đang mở: tự mở truyện kế trong cùng thể loại (nếu có) và phát tiếp. */
@@ -1225,14 +1239,16 @@ fun AppTabs() {
         if (engine == null) {
             onDispose { }
         } else {
-            val listener =
-                object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {
+            // TTS gọi listener trên luồng nền; Compose mutableState / auto-advance phải chạy trên main.
+            val progressHandler = Handler(Looper.getMainLooper())
+            val utteranceSink =
+                object : SystemTtsUtteranceProgressSink {
+                    override fun onUtteranceStart(utteranceId: String?) {
                         systemTtsUtteranceDepth++
                         speakingParagraphIndex = parseTtsParagraphIndex(utteranceId) ?: -1
                     }
 
-                    override fun onDone(utteranceId: String?) {
+                    override fun onUtteranceDone(utteranceId: String?) {
                         systemTtsUtteranceDepth =
                             (systemTtsUtteranceDepth - 1).coerceAtLeast(0)
                         speakingParagraphIndex = -1
@@ -1249,7 +1265,7 @@ fun AppTabs() {
                         }
                     }
 
-                    override fun onError(utteranceId: String?) {
+                    override fun onUtteranceError(utteranceId: String?) {
                         systemTtsUtteranceDepth =
                             (systemTtsUtteranceDepth - 1).coerceAtLeast(0)
                         speakingParagraphIndex = -1
@@ -1260,8 +1276,14 @@ fun AppTabs() {
                         }
                     }
                 }
+            val listener =
+                SystemParagraphSpeechEngine.utteranceProgressListener(
+                    progressHandler,
+                    utteranceSink,
+                )
             engine.setOnUtteranceProgressListener(listener)
             onDispose {
+                progressHandler.removeCallbacksAndMessages(null)
                 engine.setOnUtteranceProgressListener(null)
             }
         }
@@ -1394,8 +1416,10 @@ fun AppTabs() {
                         return@launch
                     }
                     withContext(Dispatchers.Main) {
-                        tts?.stop()
+                        systemParagraphSpeechEngine.stopPlayback()
+                        elevenParagraphSpeechEngine.stopPlayback()
                         systemTtsStoryUtterancesRemaining = 0
+                        elevenLabsPlayJob = null
                         val cleaned = canonicalTextFromRaw(merged)
                         text = cleaned
                         prefs.saveLastText(cleaned)
@@ -1406,16 +1430,17 @@ fun AppTabs() {
                         activeLibraryStoryId = null
                         tabIndex = 0
                         val paras = splitIntoParagraphs(cleaned)
-                        val (ok, n) = speakParagraphsSequential(tts, paras, 0)
-                        if (!ok || n == 0) {
-                            Toast.makeText(
-                                context,
-                                "Không phát được TTS.",
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        } else {
-                            systemTtsStoryUtterancesRemaining = n
-                        }
+                        systemParagraphSpeechEngine.startParagraphSequence(
+                            paras,
+                            0,
+                            ParagraphSpeechSequenceCallbacks(
+                                onSpeakingParagraphIndex = {},
+                                onErrorToast = { msg ->
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                },
+                                onSystemQueuedUtteranceCount = { systemTtsStoryUtterancesRemaining = it },
+                            ),
+                        )
                     }
                 }
             },

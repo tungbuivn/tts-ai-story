@@ -2,7 +2,7 @@
 
 **Người dùng cuối:** xem [USER_GUIDE.md](USER_GUIDE.md) — hướng dẫn từng bước, không cần kiến thức lập trình.
 
-Ứng dụng Android đọc văn bản bằng **TTS** (giọng hệ thống hoặc **ElevenLabs**), soạn/ghi nhớ nội dung và quản lý **thư viện truyện** theo thể loại — có **import thư mục** từ bộ nhớ (SAF), xuất văn bản / xuất **file âm thanh AAC (.m4a)**.
+Ứng dụng Android đọc văn bản bằng **TTS** (giọng hệ thống hoặc **ElevenLabs**), soạn/ghi nhớ nội dung và quản lý **thư viện truyện** theo thể loại — có **import thư mục** từ bộ nhớ (SAF), **mở file .zip / .epub** (nhập thư viện), xuất văn bản (**.txt**, **.zip**, **.epub**) / xuất **file âm thanh AAC (.m4a)**. Chi tiết thao tác: [USER_GUIDE.md](USER_GUIDE.md).
 
 - **Package:** `com.ttsaistory.app`
 - **minSdk / targetSdk:** 26 / 35 (xem `app/build.gradle.kts`).
@@ -25,7 +25,7 @@ Mở bằng nút **☰** trên thanh trên.
 
 | Mục | Chức năng |
 |-----|------------|
-| **Mở file…** | Chọn file văn bản qua SAF; nội dung đưa vào luồng xử lý giống mở file (thường gắn thư viện / tab Text tùy luồng app). |
+| **Mở file…** | SAF: **.txt** (văn bản), **.zip** (giải nén + nhập từng file văn), **.epub** (chương theo spine → thư viện). Zip/epub dùng dialog **Open file progress** trong lúc xử lý. |
 | **Text** / **Thư viện** | Chuyển nhanh giữa hai tab. |
 | **Cấu hình ElevenLabs** | API key và tùy chọn dùng giọng ElevenLabs (cần Internet). |
 | **Cấu hình TTS hệ thống** | Giọng, tốc độ, cao độ Android TTS. |
@@ -38,7 +38,8 @@ Mở bằng nút **☰** trên thanh trên.
 
 - **Soạn văn:** nhập hoặc dán nội dung; app có thể tách **đoạn / câu** để đọc TTS tuần tự (theo chế độ đang bật trên thanh công cụ soạn).
 - **Chọn engine đọc:** **TTS hệ thống** hoặc **ElevenLabs** (segment trên vùng soạn / toolbar — đổi engine sẽ ảnh hưởng luồng đọc).
-- **Phát / dừng đọc:** dùng các nút điều khiển trên toolbar vùng Text (Play, dừng toàn bộ, v.v.).
+- **Danh sách truyện (icon list):** chọn truyện khác trong cùng thể loại, lọc tên, đổi thứ tự (khi không lọc).
+- **Phát / dừng đọc:** dùng các nút điều khiển trên toolbar vùng Text (Play, dừng toàn bộ, v.v.). Khi tắt màn hình, app dùng **wake lock** để giảm khả năng bị cắt giữa chừng (tùy OEM / pin).
 - **Cài đặt nhanh:** nút **bánh răng** trên top bar khi đang ở tab Text — mở cấu hình TTS tương ứng engine đang chọn (hệ thống / ElevenLabs).
 - **Xuất âm thanh AAC (.m4a):** trên toolbar có thao tác xuất TTS sang file **.m4a** (tiến trình có thể chạy nền với thông báo; chi tiết trong UI dialog xuất).
 - **Thanh dưới:** nhảy đoạn đầu/cuối, đoạn trước/sau, hiển thị chỉ số câu/đoạn đang đọc và tổng số (khi đã tính xong).
@@ -55,7 +56,7 @@ Mở bằng nút **☰** trên thanh trên.
 - **Kéo thứ tự thể loại:** giữ **⋮⋮** (drag handle) rồi kéo dọc; thả tay sau khi xong — thứ tự được lưu.
 - **Menu ⋮** trên từng thể loại:
   - **Đổi tên thể loại**
-  - **Xuất ra…** — xuất nội dung thể loại ra **Downloads** (đường dẫn kiểu `Download/tts-ai-story/…`): chọn **ghép một file .txt** hoặc **mỗi truyện một file** (số thứ tự `00000001.txt` …).
+  - **Xuất ra…** — xuất nội dung thể loại ra **Downloads** (đường dẫn kiểu `Download/tts-ai-story/…`): **một .txt ghép**, **thư mục + file .txt đánh số**, **một .zip**, hoặc **một .epub** (mục lục từ dòng đầu mỗi truyện).
   - **Đồng bộ thư mục** — với thể loại đã **import thư mục** trước đó (app đã lưu URI cây SAF): **xóa toàn bộ truyện trong thể loại** rồi **import lại** từ cùng thư mục; có **popup tiến trình** giống lúc import. Cần quyền đọc thư mục vẫn còn hiệu lực.
   - **Xóa thể loại**
 
@@ -92,6 +93,7 @@ Sau khi xử lý, intent thường được **xoá** để tránh nhập trùng 
 ## Quyền & dữ liệu
 
 - **Internet:** ElevenLabs, tải URL khi chia sẻ link.
+- **WAKE_LOCK:** hỗ trợ phát TTS / MP3 khi màn hình tắt (không thay thế foreground service media đầy đủ).
 - **Thông báo / Foreground service:** phục vụ xuất AAC và các tác vụ nền liên quan (theo manifest).
 - **Bộ nhớ ngoài (tuỳ API):** ghi Downloads / Music cho xuất; đọc font (API cũ có thể cần `READ_EXTERNAL_STORAGE` tới 32).
 

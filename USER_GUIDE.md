@@ -10,7 +10,7 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 
 - **Đọc văn bản thành tiếng** bằng giọng **máy Android** hoặc giọng **ElevenLabs** (cần Internet và tài khoản/API key).
 - **Soạn, dán hoặc mở** nội dung trên màn hình **Text**.
-- **Lưu truyện theo thể loại** trên màn hình **Thư viện** — thêm, đổi tên, sắp xếp, xóa, **nhập cả thư mục** từ máy, **xuất** ra thư mục Tải xuống khi cần.
+- **Lưu truyện theo thể loại** trên màn hình **Thư viện** — thêm, đổi tên, sắp xếp, xóa, **nhập cả thư mục** từ máy, **nhập file .zip / .epub** (mở từ menu), **xuất** ra thư mục Tải xuống khi cần.
 - **Xuất file âm thanh** dạng **.m4a** (AAC) từ nội dung đang đọc (có thể hiện thông báo khi xuất).
 
 ---
@@ -28,7 +28,7 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 
 | Bạn chạm | Việc xảy ra |
 |----------|-------------|
-| **Mở file…** | Mở trình chọn file của Android — chọn **file văn bản** để đưa vào app (thường để đọc hoặc xử lý như mở file). |
+| **Mở file…** | Mở trình chọn file của Android (SAF). Bạn có thể chọn:<br>• **File văn bản** (`.txt`, v.v.) — mở vào app / lưu thư viện tùy luồng.<br>• **File .zip** — app giải nén và **nhập từng file văn** trong zip thành truyện trong một **thể loại** (tên thể loại thường theo tên file zip).<br>• **File .epub** — app đọc sách điện tử, **tách theo thứ tự chương** trong spine, ghi thành các truyện đánh số trong một thể loại.<br>Trong lúc xử lý **zip / epub** (và bước đầu mở file), có hộp thoại **Open file progress** (tiêu đề cố định) với dòng trạng thái và thanh chờ — **nên để app chạy xong** trước khi thoát hẳn. |
 | **Text** / **Thư viện** | Chuyển nhanh sang tab tương ứng. |
 | **Cấu hình ElevenLabs** | Nhập **API key**, chọn giọng/tùy chọn ElevenLabs. Cần **mạng**. |
 | **Cấu hình TTS hệ thống** | Chọn **giọng đọc**, **tốc độ**, **cao độ** của TTS có sẵn trên máy. |
@@ -43,18 +43,20 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 
 - Gõ hoặc **dán** văn bản vào vùng lớn ở giữa.
 - Hoặc mở truyện từ **Thư viện** (chạm tên truyện) — nội dung sẽ hiện ở đây.
-- Hoặc dùng **Mở file…** trong menu ☰.
+- Hoặc dùng **Mở file…** trong menu ☰ (xem bảng trên: txt, zip, epub).
 
 ### 2. Chọn giọng đọc
 
-- Trên vùng Text có phần chọn **TTS hệ thống** hoặc **ElevenLabs** (tùy giao diện phiên bản bạn đang dùng).
+- Trên vùng Text có phần chọn **TTS hệ thống** hoặc **ElevenLabs** (chip lựa chọn).
 - **Hệ thống:** không tốn API; dùng giọng đã cài trên máy (Google TTS, Samsung, v.v.).
 - **ElevenLabs:** giọng chất lượng cao hơn; cần cấu hình trong menu ☰ và **Internet**.
+- Bên cạnh phần chọn engine có **icon danh sách** (☰ dạng list): mở **hộp thoại chọn truyện** trong **thể loại đang gắn** với truyện bạn mở (hoặc thể loại đầu tiên nếu chưa gắn truyện thư viện). Trong đó bạn có thể **lọc theo tên**, **chạm truyện để mở**, **đổi thứ tự** (mũi tên lên/xuống khi **không** bật lọc tên). Chạm **Đóng** hoặc ngoài vùng tùy hộp thoại để thoát.
 
 ### 3. Đọc và dừng
 
 - Dùng nút **Phát** / **Dừng** (và các nút liên quan) trên **thanh công cụ** phía trên vùng soạn.
 - Muốn chỉnh nhanh giọng/tốc độ: chạm **bánh răng** trên thanh trên (khi đang ở tab Text) — mở đúng màn hình cài đặt cho engine bạn đang chọn.
+- **Tắt màn hình khi đang đọc:** app cố gắng **giữ phần cứng đủ hoạt động** để TTS hoặc bản phát ElevenLabs **không bị cắt ngay** sau khi bạn tắt màn hình (Android vẫn có thể quản lý pin / chế độ tiết kiệm theo máy). Nếu đọc dài, bạn có thể **hạ độ sáng** thay vì tắt nguồn màn hình để an toàn hơn.
 
 ### 4. Đoạn / câu
 
@@ -83,10 +85,13 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 **Menu ⋮ trên từng thể loại**
 
 - **Đổi tên thể loại**
-- **Xuất ra…** — đưa nội dung ra thư mục **Tải xuống** (thường có đường dẫn kiểu `Download/tts-ai-story/…`):
+- **Chọn ảnh đại diện** (Select image) — gắn ảnh bìa cho thể loại nếu app hỗ trợ.
+- **Xuất ra…** — đưa nội dung ra thư mục **Tải xuống** (thường có đường dẫn kiểu `Download/tts-ai-story/…`). Có thể chọn dạng:
   - **Một file .txt** ghép tất cả truyện, hoặc
-  - **Mỗi truyện một file** (tên dạng số thứ tự).
-- **Đồng bộ thư mục** — chỉ có ý nghĩa nếu thể loại đó trước đó được tạo bằng **Nhập thư mục**: app **xóa hết truyện trong thể loại** rồi **nhập lại** từ **cùng một thư mục** bạn đã chọn lúc đầu. Bạn cần vẫn **cho phép app truy cập thư mục** (Android có thể hỏi lại).
+  - **Mỗi truyện một file** trong một thư mục (tên dạng số thứ tự `00000001.txt` …), hoặc
+  - **Một file .zip** (bên trong là các `.txt` đánh số), hoặc
+  - **Một file .epub** (mục lục lấy từ dòng đầu mỗi truyện).
+- **Đồng bộ thư mục** — chỉ có ý nghĩa nếu thể loại đó trước đó được tạo bằng **Nhập thư mục**: app **xóa hết truyện trong thể loại** rồi **nhập lại** từ **cùng một thư mục** bạn đã chọn lúc đầu. Bạn cần vẫn **cho phép app truy cập thư mục** (Android có thể hỏi lại). Có **cửa sổ tiến trình** trong lúc chạy.
 - **Xóa thể loại** — mất hết truyện trong thể loại đó trong app (cân nhắc trước khi xóa).
 
 ### Truyện trong một thể loại
@@ -115,6 +120,7 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 
 - **Chia sẻ** một đoạn văn hoặc **liên kết** từ trình duyệt / ghi chú — chọn **TTS AI Story** trong danh sách chia sẻ. App sẽ xử lý (văn bản hoặc thử tải nội dung từ link, tùy loại dữ liệu).
 - **Mở file .txt** từ ứng dụng Quản lý file — **Mở bằng** → chọn app này nếu Android gợi ý.
+- **Mở .zip / .epub** tương tự nếu app khác gửi sang (tùy hệ điều hành); hoặc dùng **Mở file…** trong menu ☰ để chọn rõ ràng.
 - Một số app hỗ trợ **“Xử lý văn bản đã chọn”** — bạn có thể gửi đoạn đang bôi đen sang TTS AI Story.
 
 Nếu sau khi mở bạn **quay lại** app mà nội dung không bị nhập trùng, đó là do app đã xử lý xong lần chia sẻ trước (hành vi bình thường).
@@ -125,6 +131,7 @@ Nếu sau khi mở bạn **quay lại** app mà nội dung không bị nhập tr
 
 - **Internet:** bắt buộc nếu dùng ElevenLabs hoặc khi app cần tải nội dung từ liên kết.
 - **Thông báo:** có thể được hỏi khi **xuất file âm thanh** chạy nền — nên **cho phép** để theo dõi tiến độ.
+- **WAKE_LOCK (giữ CPU khi đọc):** dùng để giảm tình trạng **đọc bị cắt** sau khi tắt màn hình; không bật màn hình thay bạn.
 - Truyện trong Thư viện được lưu **trong app**; muốn có bản trên máy dễ tìm (Máy tính / Tải xuống), hãy dùng **Xuất ra…** hoặc xuất từ menu thể loại như trên.
 
 ---
@@ -136,7 +143,9 @@ Nếu sau khi mở bạn **quay lại** app mà nội dung không bị nhập tr
 | Không có tiếng | Kiểm tra **âm lượng máy**, đang chọn **TTS hệ thống** hay **ElevenLabs**, và trong menu ☰ mở **Cấu hình TTS** tương ứng xem đã chọn giọng chưa. |
 | ElevenLabs không đọc | Cần **mạng**, **API key đúng**, còn hạn mức tài khoản ElevenLabs. |
 | Import thư mục trống | Thư mục cần có **file văn bản** (txt, v.v.) mà app đọc được; thử thư mục khác hoặc kiểm tra định dạng file. |
+| Mở zip / epub báo lỗi | File có thể **hỏng**, **không phải zip/epub**, **epub có mã hóa** (DRM) — app không hỗ trợ; thử file khác. Zip cần chứa **file văn** app đọc được sau khi giải nén. |
 | Đồng bộ thư mục báo lỗi / không chạy | Thư mục gốc có thể đã **đổi tên / di chuyển** hoặc Android **thu hồi quyền** — thử **Nhập thư mục** lại cho thể loại mới. |
+| Đọc tắt màn hình vẫn dừng | Một số máy siết **tiết kiệm pin** mạnh; thử tắt tối ưu pin cho app hoặc **không tắt nguồn màn hình** khi nghe lâu. |
 
 ---
 

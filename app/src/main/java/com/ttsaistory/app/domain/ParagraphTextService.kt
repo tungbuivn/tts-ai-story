@@ -1,5 +1,6 @@
 package com.ttsaistory.app.domain
 
+import java.lang.Character
 import kotlin.text.CharCategory
 
 /**
@@ -22,6 +23,10 @@ object ParagraphTextService {
     /**
      * Trong mỗi cặp `"…"`, chỉ [trim] nội dung giữa hai dấu (ví dụ `chào "bạn "` → `chào "bạn"`);
      * `chào "bạn"` giữ nguyên. Không xóa khoảng trắng bên ngoài cặp nháy.
+     *
+     * Nếu dấu `"` đóng là ký tự cuối của chuỗi [s] và ngay trước đó (sau khi đã trim nội dung trong nháy)
+     * vẫn còn khoảng trắng ở cuối [sb] (ví dụ phần tiền tố kết thúc bằng space), gỡ các khoảng trắng đó
+     * trước khi ghi `"` đóng.
      */
     private fun trimWhitespaceInsideAsciiDoubleQuotedSpans(s: String): String {
         val sb = StringBuilder(s.length)
@@ -39,8 +44,73 @@ object ParagraphTextService {
                 break
             }
             sb.append(s.substring(open + 1, close).trim())
+            if (close == s.lastIndex) {
+                while (sb.isNotEmpty() && sb.last().isWhitespace()) {
+                    sb.setLength(sb.length - 1)
+                }
+            }
             sb.append('"')
             i = close + 1
+        }
+        return trimWhitespaceBeforeAsciiDoubleQuoteAtStringEnd(sb.toString())
+    }
+
+    /**
+     * Chuỗi kết thúc bằng `"` ASCII: bỏ mọi khoảng trắng liền kề ngay trước dấu `"` cuối cùng
+     * (sau khi đã xử lý các cặp nháy).
+     */
+    private fun trimWhitespaceBeforeAsciiDoubleQuoteAtStringEnd(s: String): String {
+        if (s.length < 2 || s.last() != '"') return s
+        val sb = StringBuilder(s)
+        while (sb.length >= 2 && sb.last() == '"' && sb[sb.length - 2].isWhitespace()) {
+            sb.deleteCharAt(sb.length - 2)
+        }
+        return sb.toString()
+    }
+
+    /**
+     * [s] tại [index] có bắt đầu bằng codepoint chữ Unicode (dùng [Character.isLetter]).
+     */
+    private fun isUnicodeLetterCodePointAt(s: String, index: Int): Boolean {
+        if (index !in s.indices) return false
+        return Character.isLetter(s.codePointAt(index))
+    }
+
+    /**
+     * Dấu `.` tại [dotIndex] có phải chấm đơn ranh giới câu (cùng quy tắc [singleSentenceEndDot], không `..`/`...`).
+     */
+    private fun dotIsSingleSentenceBoundary(s: String, dotIndex: Int): Boolean {
+        if (dotIndex !in s.indices || s[dotIndex] != '.') return false
+        val m = singleSentenceEndDot.find(s, dotIndex) ?: return false
+        return m.range.first == dotIndex
+    }
+
+    /**
+     * Với mỗi chấm đơn ranh giới câu: bỏ khoảng trắng ngay trước và sau dấu `.`;
+     * nếu sau chấm (sau khi bỏ khoảng trắng) là chữ Unicode thì đảm bảo có đúng một khoảng trắng giữa `.` và chữ.
+     */
+    private fun normalizeSingleSentenceDotWhitespace(s: String): String {
+        if (s.isEmpty()) return s
+        val sb = StringBuilder(s.length)
+        var i = 0
+        while (i < s.length) {
+            if (s[i] == '.' && dotIsSingleSentenceBoundary(s, i)) {
+                while (sb.isNotEmpty() && sb.last().isWhitespace()) {
+                    sb.setLength(sb.length - 1)
+                }
+                sb.append('.')
+                i++
+                while (i < s.length && s[i].isWhitespace()) i++
+                if (i < s.length && isUnicodeLetterCodePointAt(s, i)) {
+                    sb.append(' ')
+                    val cp = s.codePointAt(i)
+                    sb.appendCodePoint(cp)
+                    i += Character.charCount(cp)
+                }
+                continue
+            }
+            sb.append(s[i])
+            i++
         }
         return sb.toString()
     }
@@ -59,7 +129,8 @@ object ParagraphTextService {
 
     /**
      * Chuẩn hóa một khối văn: chữ/số và một số dấu; khoảng trắng gộp; `??` → một `?`;
-     * trong cặp `"…"` (ASCII) bỏ khoảng trắng thừa đầu/cuối nội dung trong nháy.
+     * trong cặp `"…"` (ASCII) bỏ khoảng trắng thừa đầu/cuối nội dung trong nháy;
+     * chấm đơn ranh giới câu (không `..`/`...`): bỏ khoảng trắng quanh `.`, nếu sau chấm là chữ Unicode thì chèn một khoảng trắng (vd. `a.b` → `a. b`).
      * Dấu ngoặc kép Unicode (“ ” « » …) được giữ như ký tự hợp lệ (paste từ nguồn khác).
      */
     fun sanitizeParagraphText(input: String): String {
@@ -104,7 +175,10 @@ object ParagraphTextService {
                 else -> {}
             }
         }
-        return trimWhitespaceInsideAsciiDoubleQuotedSpans(sb.toString().trim())
+        val trimmed = sb.toString().trim()
+        return normalizeSingleSentenceDotWhitespace(
+            trimWhitespaceInsideAsciiDoubleQuotedSpans(trimmed),
+        )
     }
 
     /**
