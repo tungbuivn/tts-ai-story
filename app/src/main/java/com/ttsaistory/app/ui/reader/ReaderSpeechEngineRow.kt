@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -20,7 +20,7 @@ import com.ttsaistory.app.model.TextTabSpeechEngine
 
 /** Hàng chọn engine đọc (TTS hệ thống / ElevenLabs) trên tab nhập văn. */
 @Composable
-internal fun TextInputTabSpeechEngineRow(
+internal fun ReaderSpeechEngineRow(
     speechEngine: TextTabSpeechEngine,
     onSpeechEngineChange: (TextTabSpeechEngine) -> Unit,
     engineControlsEnabled: Boolean,

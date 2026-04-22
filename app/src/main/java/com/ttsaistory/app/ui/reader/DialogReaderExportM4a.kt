@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,8 +22,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.ttsaistory.app.ui.core.CancelButton
 
 @Composable
-internal fun DialogExportM4AAudio(
-    exportUi: TtsExportDialogState,
+internal fun DialogReaderExportM4a(
+    exportUi: DialogTtsExportState,
     onCancelExport: () -> Unit,
 ) {
     Dialog(

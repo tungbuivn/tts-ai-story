@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -19,7 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun TextInputTabParagraphModeToggleRow(
+internal fun ReaderParagraphModeToggleRow(
     paragraphSplitMode: Boolean,
     onSwitchToFullTextMode: () -> Unit,
     onSwitchToParagraphSplitMode: () -> Unit,

@@ -1,5 +1,5 @@
 /**
- * Gom trạng thái hiển thị tab nhập liệu (đường dẫn font, [androidx.compose.ui.text.font.FontFamily],
+ * Gom trạng thái hiển thị tab đọc (đường dẫn font, [androidx.compose.ui.text.font.FontFamily],
  * cỡ chữ, khoảng cách dòng, [androidx.compose.ui.text.TextStyle] nền) từ prefs và epoch làm mới font để Compose remember.
  */
 package com.ttsaistory.app.ui.fonts
@@ -15,7 +15,7 @@ import androidx.compose.ui.unit.sp
 import com.ttsaistory.app.model.AppPreferenceKeys
 
 @Immutable
-internal data class TextInputTabEditorAppearance(
+internal data class ReaderTabEditorAppearance(
     val fullEditorFontPath: String,
     val fullEditorFontFamily: FontFamily,
     val paragraphEditorFontFamily: FontFamily,
@@ -25,10 +25,10 @@ internal data class TextInputTabEditorAppearance(
 )
 
 @Composable
-internal fun rememberTextInputTabEditorAppearance(
+internal fun rememberReaderTabEditorAppearance(
     prefs: SharedPreferences,
     fontPrefsEpoch: Int,
-): TextInputTabEditorAppearance {
+): ReaderTabEditorAppearance {
     val fullEditorFontPath =
         prefs.getString(AppPreferenceKeys.KEY_EDITOR_FONT_FULL_TEXT_PATH, "").orEmpty()
     val paragraphEditorFontPath =
@@ -64,7 +64,7 @@ internal fun rememberTextInputTabEditorAppearance(
         remember(bodyLargeFromTheme, editorFontSizeSp) {
             bodyLargeFromTheme.copy(fontSize = editorFontSizeSp.sp)
         }
-    return TextInputTabEditorAppearance(
+    return ReaderTabEditorAppearance(
         fullEditorFontPath = fullEditorFontPath,
         fullEditorFontFamily = fullEditorFontFamily,
         paragraphEditorFontFamily = paragraphEditorFontFamily,

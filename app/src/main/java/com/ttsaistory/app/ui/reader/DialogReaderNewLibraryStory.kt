@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,7 +25,7 @@ import com.ttsaistory.app.data.LibraryCategoryRow
 import com.ttsaistory.app.ui.core.CancelButton
 
 @Composable
-internal fun DialogTextTabNewLibraryStory(
+internal fun DialogReaderNewLibraryStory(
     categories: List<LibraryCategoryRow>,
     newCategoryNameDraft: String,
     onNewCategoryNameDraftChange: (String) -> Unit,

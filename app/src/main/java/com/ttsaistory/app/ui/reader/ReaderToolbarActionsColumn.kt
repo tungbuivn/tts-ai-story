@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
  * kèm hàng chế độ đoạn khi đang chỉnh sửa.
  */
 @Composable
-internal fun TextInputTabToolbarActionsColumn(
+internal fun ReaderToolbarActionsColumn(
     modifier: Modifier = Modifier,
     textEditorChromeViewOnly: Boolean,
     onToggleEditorChromeViewOnly: () -> Unit,
@@ -116,7 +116,7 @@ internal fun TextInputTabToolbarActionsColumn(
             }
         }
         if (!textEditorChromeViewOnly) {
-            TextInputTabParagraphModeToggleRow(
+            ReaderParagraphModeToggleRow(
                 paragraphSplitMode = paragraphSplitMode,
                 onSwitchToFullTextMode = onSwitchToFullTextMode,
                 onSwitchToParagraphSplitMode = onSwitchToParagraphSplitMode,

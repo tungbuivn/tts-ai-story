@@ -1,6 +1,6 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
-data class TtsExportDialogState(
+data class DialogTtsExportState(
     val wavProgress: Float,
     val wavDetail: String,
     val aacProgress: Float,

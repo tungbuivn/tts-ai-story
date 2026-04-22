@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import android.Manifest
 import android.content.ClipboardManager
@@ -116,7 +116,7 @@ import com.ttsaistory.app.data.LibraryStoryRow
 import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.elevenlabs.ElevenLabsPrefKeys
 import com.ttsaistory.app.ui.fonts.editorLineHeightSp
-import com.ttsaistory.app.ui.fonts.rememberTextInputTabEditorAppearance
+import com.ttsaistory.app.ui.fonts.rememberReaderTabEditorAppearance
 import com.ttsaistory.app.domain.canonicalTextFromRaw
 import com.ttsaistory.app.domain.charOffsetForEditorFlatCellInMerged
 import com.ttsaistory.app.domain.editorUiFlatForTtsParagraphStartIndexForFlatCells
@@ -141,6 +141,9 @@ import com.ttsaistory.app.domain.ttsParagraphStartIndexForEachFlatCell
 import com.ttsaistory.app.model.AppEditorConstants
 import com.ttsaistory.app.model.AppPreferenceKeys
 import com.ttsaistory.app.model.TextTabSpeechEngine
+import com.ttsaistory.app.model.clearLastReadingBookmark
+import com.ttsaistory.app.model.lastReadingBookmarkAppliesToStory
+import com.ttsaistory.app.model.putLastReadingBookmark
 import com.ttsaistory.app.model.saveLastText
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -154,7 +157,7 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun TextInputTab(
+fun ReaderTab(
     modifier: Modifier = Modifier,
     prefs: SharedPreferences,
     text: String,
@@ -182,7 +185,7 @@ fun TextInputTab(
     /** Đăng ký hàm flush bản nháp đoạn lên [text] trước khi app nhận share / đổi truyện thư viện. */
     onRegisterParagraphDraftFlush: ((() -> Unit) -> Unit)? = null,
     /** Đăng ký hành động bottom bar (cuộn đầu/cuối / con trỏ đầu cuối); null khi huỷ đăng ký. */
-    onRegisterTextTabBottomNav: ((TextTabBottomNavBridge?) -> Unit)? = null,
+    onRegisterReaderBottomNav: ((ReaderBottomNavBridge?) -> Unit)? = null,
     systemTtsSpeechRate: Float,
     systemTtsPitch: Float,
 ) {
@@ -224,7 +227,7 @@ fun TextInputTab(
     val fullTextNativeEditRef = remember { java.util.concurrent.atomic.AtomicReference<EditText?>(null) }
     val nativeTextProgrammatic = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     var fullTextNativeFocused by remember { mutableStateOf(false) }
-    var exportUiFromCoordinator by remember { mutableStateOf<TtsExportDialogState?>(null) }
+    var exportUiFromCoordinator by remember { mutableStateOf<DialogTtsExportState?>(null) }
     LaunchedEffect(Unit) {
         TtsExportUiCoordinator.uiState.collect { exportUiFromCoordinator = it }
     }
@@ -377,8 +380,8 @@ fun TextInputTab(
             }
         }
 
-    val prefsBridge = rememberTextInputTabPrefsBridge(prefs)
-    val editorAppearance = rememberTextInputTabEditorAppearance(prefs, prefsBridge.fontPrefsEpoch)
+    val prefsBridge = rememberReaderTabPrefsBridge(prefs)
+    val editorAppearance = rememberReaderTabEditorAppearance(prefs, prefsBridge.fontPrefsEpoch)
     LaunchedEffect(bookmarkResetKey, librarySyncEpoch) {
         prefsBridge.refreshBookmarkFromPrefs()
     }
@@ -399,7 +402,7 @@ fun TextInputTab(
         persistDebouncer.job?.cancel()
         persistDebouncer.job =
             scope.launch {
-                delay(AppEditorConstants.PARAGRAPH_FIELD_PERSIST_DEBOUNCE_MS)
+                delay(timeMillis = AppEditorConstants.PARAGRAPH_FIELD_PERSIST_DEBOUNCE_MS)
                 val rows = paragraphGroupFieldValues.map { r -> r.map { it.text } }
                 val merged =
                     withContext(Dispatchers.Default) { mergeMainParagraphGroups(rows) }
@@ -462,17 +465,17 @@ fun TextInputTab(
         val snapshot = mergedParagraphFields()
         val t0 =
             AnrDiagLog.begin(
-                "TextInputTab paragraphMainGroupsForEditor(leaveEditViewOnly) len=${snapshot.length}",
+                "ReaderTab paragraphMainGroupsForEditor(leaveEditViewOnly) len=${snapshot.length}",
             )
         val segs =
             withContext(Dispatchers.Default) { paragraphMainGroupsForEditor(snapshot) }
         if (!textEditorChromeViewOnly || !paragraphSplitMode) {
-            AnrDiagLog.end("TextInputTab paragraphMainGroupsForEditor(leaveEditViewOnly) CANCELLED", t0)
+            AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor(leaveEditViewOnly) CANCELLED", t0)
             return@LaunchedEffect
         }
         if (mergedParagraphFields() != snapshot) {
-            AnrDiagLog.i("TextInputTab paragraphMainGroupsForEditor(leaveEditViewOnly) stale skip")
-            AnrDiagLog.end("TextInputTab paragraphMainGroupsForEditor(leaveEditViewOnly) STALE", t0)
+            AnrDiagLog.i("ReaderTab paragraphMainGroupsForEditor(leaveEditViewOnly) stale skip")
+            AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor(leaveEditViewOnly) STALE", t0)
             return@LaunchedEffect
         }
         paragraphGroupFieldValues =
@@ -483,7 +486,7 @@ fun TextInputTab(
             }
         prevParagraphSplitMode = true
         AnrDiagLog.end(
-            "TextInputTab paragraphMainGroupsForEditor(leaveEditViewOnly) rows=${segs.size} cells=${segs.sumOf { it.size }}",
+            "ReaderTab paragraphMainGroupsForEditor(leaveEditViewOnly) rows=${segs.size} cells=${segs.sumOf { it.size }}",
             t0,
         )
     }
@@ -497,7 +500,7 @@ fun TextInputTab(
         val maxUi = (groups.sumOf { it.size } - 1).coerceAtLeast(0)
         val v = editorUiFlat.coerceIn(0, maxUi)
         val tts = editorUiFlatToTtsParagraphStartIndex(groups, v).coerceAtLeast(0)
-        prefs.edit().putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, tts).apply()
+        prefs.edit().putLastReadingBookmark(tts, activeLibraryStoryId).apply()
     }
 
     /** Như [persistLastReadingBookmarkFromEditorFlat] nhưng không tạo bản sao List<List<String>> toàn lưới (chạm ô). */
@@ -509,7 +512,7 @@ fun TextInputTab(
         val maxUi = (fieldGroups.sumOf { it.size } - 1).coerceAtLeast(0)
         val v = editorUiFlat.coerceIn(0, maxUi)
         val tts = editorFlatToTtsBookmarkIndex(fieldGroups, v).coerceAtLeast(0)
-        prefs.edit().putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, tts).apply()
+        prefs.edit().putLastReadingBookmark(tts, activeLibraryStoryId).apply()
     }
 
     SideEffect {
@@ -590,8 +593,8 @@ fun TextInputTab(
     }
 
     SideEffect {
-        onRegisterTextTabBottomNav?.invoke(
-            TextTabBottomNavBridge(
+        onRegisterReaderBottomNav?.invoke(
+            ReaderBottomNavBridge(
                 paragraphSplitMode = paragraphSplitMode,
                 showPasteAndCaretStep = !textEditorChromeViewOnly,
                 showParagraphFocusSlider = paragraphSplitMode && flatItemCount > 0,
@@ -813,9 +816,9 @@ fun TextInputTab(
             ),
         )
     }
-    // Không key theo onRegisterTextTabBottomNav: lambda từ AppTabs đổi mỗi recompose → onDispose gọi
+    // Không key theo onRegisterReaderBottomNav: lambda từ AppTabs đổi mỗi recompose → onDispose gọi
     // invoke(null) làm mất bridge (slider / +/- không cập nhật).
-    val latestRegisterBottomNav by rememberUpdatedState(onRegisterTextTabBottomNav)
+    val latestRegisterBottomNav by rememberUpdatedState(onRegisterReaderBottomNav)
     DisposableEffect(Unit) {
         onDispose { latestRegisterBottomNav?.invoke(null) }
     }
@@ -860,14 +863,14 @@ fun TextInputTab(
 
     LaunchedEffect(text) {
         val snapshot = text
-        val t0 = AnrDiagLog.begin("TextInputTab paragraphsForEditor len=${snapshot.length}")
+        val t0 = AnrDiagLog.begin("ReaderTab paragraphsForEditor len=${snapshot.length}")
         val computed =
             withContext(Dispatchers.Default) { paragraphsForEditor(snapshot) }
         if (snapshot == text) {
             segments = computed
-            AnrDiagLog.end("TextInputTab paragraphsForEditor segs=${computed.size}", t0)
+            AnrDiagLog.end("ReaderTab paragraphsForEditor segs=${computed.size}", t0)
         } else {
-            AnrDiagLog.i("TextInputTab paragraphsForEditor dropped (text changed)")
+            AnrDiagLog.i("ReaderTab paragraphsForEditor dropped (text changed)")
         }
     }
 
@@ -891,19 +894,19 @@ fun TextInputTab(
         // Bỏ tổng cũ trước khi bật working — tránh bottom bar tưởng split xong (còn số cũ) trong khi dialog vẫn "đang tách".
         toolbarTtsSpeakableCount = null
         toolbarTtsSplitWorking = true
-        val t0 = AnrDiagLog.begin("TextInputTab splitIntoParagraphs(mergedToolbar) len=${snap.length}")
+        val t0 = AnrDiagLog.begin("ReaderTab splitIntoParagraphs(mergedToolbar) len=${snap.length}")
         try {
             val paras =
                 withContext(Dispatchers.Default) { splitIntoParagraphs(snap) }
             if (snap != mergedForPlayToolbar) {
-                AnrDiagLog.i("TextInputTab splitIntoParagraphs(mergedToolbar) dropped (merged changed)")
+                AnrDiagLog.i("ReaderTab splitIntoParagraphs(mergedToolbar) dropped (merged changed)")
                 return@LaunchedEffect
             }
             playToolbarParagraphsDebounced = paras
             toolbarTtsSpeakableCount =
                 paras.count { sanitizeParagraphText(it).isNotEmpty() }
             AnrDiagLog.end(
-                "TextInputTab splitIntoParagraphs(mergedToolbar) n=${paras.size}",
+                "ReaderTab splitIntoParagraphs(mergedToolbar) n=${paras.size}",
                 t0,
             )
         } finally {
@@ -921,16 +924,16 @@ fun TextInputTab(
         val snapshot = text
         val t0 =
             AnrDiagLog.begin(
-                "TextInputTab paragraphMainGroupsForEditor(librarySyncEpoch=$librarySyncEpoch) len=${snapshot.length}",
+                "ReaderTab paragraphMainGroupsForEditor(librarySyncEpoch=$librarySyncEpoch) len=${snapshot.length}",
             )
         val segs =
             withContext(Dispatchers.Default) { paragraphMainGroupsForEditor(snapshot) }
         if (snapshot != text || !paragraphSplitMode) {
-            AnrDiagLog.end("TextInputTab paragraphMainGroupsForEditor libSync CANCELLED", t0)
+            AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor libSync CANCELLED", t0)
             return@LaunchedEffect
         }
         AnrDiagLog.end(
-            "TextInputTab paragraphMainGroupsForEditor libSync rows=${segs.size} cells=${segs.sumOf { it.size }}",
+            "ReaderTab paragraphMainGroupsForEditor libSync rows=${segs.size} cells=${segs.sumOf { it.size }}",
             t0,
         )
         paragraphGroupFieldValues =
@@ -952,16 +955,16 @@ fun TextInputTab(
         val snapshot = text
         val tParse =
             AnrDiagLog.begin(
-                "TextInputTab paragraphMainGroupsForEditor(splitMode+text) len=${snapshot.length}",
+                "ReaderTab paragraphMainGroupsForEditor(splitMode+text) len=${snapshot.length}",
             )
         val segs =
             withContext(Dispatchers.Default) { paragraphMainGroupsForEditor(snapshot) }
         if (snapshot != text || !paragraphSplitMode) {
-            AnrDiagLog.end("TextInputTab paragraphMainGroupsForEditor(splitMode+text) CANCELLED", tParse)
+            AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor(splitMode+text) CANCELLED", tParse)
             return@LaunchedEffect
         }
         AnrDiagLog.end(
-            "TextInputTab paragraphMainGroupsForEditor(splitMode+text) rows=${segs.size}",
+            "ReaderTab paragraphMainGroupsForEditor(splitMode+text) rows=${segs.size}",
             tParse,
         )
         if (prevParagraphSplitMode != true) {
@@ -975,13 +978,13 @@ fun TextInputTab(
             return@LaunchedEffect
         }
         val cellCount = paragraphGroupFieldValues.sumOf { it.size }
-        val tMap = AnrDiagLog.begin("TextInputTab fieldRows.map MAIN cells=$cellCount")
+        val tMap = AnrDiagLog.begin("ReaderTab fieldRows.map MAIN cells=$cellCount")
         val fieldRows = paragraphGroupFieldValues.map { row -> row.map { it.text } }
-        AnrDiagLog.end("TextInputTab fieldRows.map MAIN", tMap)
-        val tMerge = AnrDiagLog.begin("TextInputTab mergeMainParagraphGroups(Default)")
+        AnrDiagLog.end("ReaderTab fieldRows.map MAIN", tMap)
+        val tMerge = AnrDiagLog.begin("ReaderTab mergeMainParagraphGroups(Default)")
         val merged =
             withContext(Dispatchers.Default) { mergeMainParagraphGroups(fieldRows) }
-        AnrDiagLog.end("TextInputTab mergeMainParagraphGroups(Default) mergedLen=${merged.length}", tMerge)
+        AnrDiagLog.end("ReaderTab mergeMainParagraphGroups(Default) mergedLen=${merged.length}", tMerge)
         if (snapshot != text || !paragraphSplitMode) return@LaunchedEffect
         if (merged != text) {
             paragraphGroupFieldValues =
@@ -998,6 +1001,7 @@ fun TextInputTab(
         segments.size,
         bookmarkResetKey,
         librarySyncEpoch,
+        activeLibraryStoryId,
     ) {
         if (!paragraphSplitMode) return@LaunchedEffect
         if (didScrollToSavedBookmark.value) return@LaunchedEffect
@@ -1005,7 +1009,12 @@ fun TextInputTab(
         delay(48)
         val cellCount = paragraphGroupFieldValues.sumOf { it.size }
         if (cellCount <= 0) return@LaunchedEffect
-        val saved = prefs.getInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
+        val saved =
+            if (prefs.lastReadingBookmarkAppliesToStory(activeLibraryStoryId)) {
+                prefs.getInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
+            } else {
+                -1
+            }
         if (saved < 0) {
             didScrollToSavedBookmark.value = true
             return@LaunchedEffect
@@ -1039,10 +1048,17 @@ fun TextInputTab(
         flatItemCount,
         speakingParagraphIndex,
         prefsBridge.trackedLastReadingParagraphIndex,
+        prefsBridge.trackedLastReadingParagraphStoryId,
+        activeLibraryStoryId,
     ) {
         if (!paragraphSplitMode || flatItemCount <= 0) return@LaunchedEffect
         val sp = speakingParagraphIndex
-        val saved = prefsBridge.trackedLastReadingParagraphIndex
+        val saved =
+            if (prefs.lastReadingBookmarkAppliesToStory(activeLibraryStoryId)) {
+                prefsBridge.trackedLastReadingParagraphIndex
+            } else {
+                -1
+            }
         val gl = latestParagraphFieldGroups
         val maxFlat = (flatItemCount - 1).coerceAtLeast(0)
         when {
@@ -1094,13 +1110,14 @@ fun TextInputTab(
         fullTextFocusRequester.requestFocus()
     }
 
-    Column(
-        modifier =
-            modifier
-                .fillMaxSize()
-                .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
+    Box(modifier.fillMaxSize()) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
         Column(
             modifier =
                 Modifier
@@ -1109,14 +1126,14 @@ fun TextInputTab(
                     .verticalScroll(textTabToolbarScrollState),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextInputTabSpeechEngineRow(
+            ReaderSpeechEngineRow(
                 speechEngine = speechEngine,
                 onSpeechEngineChange = onSpeechEngineChange,
                 engineControlsEnabled = exportUiFromCoordinator == null,
                 libraryStoryPickerEnabled = exportUiFromCoordinator == null,
                 onOpenLibraryStoryPicker = ::openLibraryStoryPickerFromToolbar,
             )
-            TextInputTabToolbarActionsColumn(
+            ReaderToolbarActionsColumn(
                 modifier = Modifier.fillMaxWidth(),
                 textEditorChromeViewOnly = textEditorChromeViewOnly,
                 onToggleEditorChromeViewOnly = {
@@ -1133,8 +1150,14 @@ fun TextInputTab(
                             text,
                         )
                     val paras = splitIntoParagraphs(src)
-                    val bookmark =
+                    val bookmarkRaw =
                         prefs.getInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
+                    val bookmark =
+                        if (prefs.lastReadingBookmarkAppliesToStory(activeLibraryStoryId)) {
+                            bookmarkRaw
+                        } else {
+                            -1
+                        }
                     val maxP = (paras.size - 1).coerceAtLeast(0)
                     val resumeIdx =
                         if (bookmark >= 0) {
@@ -1225,7 +1248,7 @@ fun TextInputTab(
             )
         }
         exportUiFromCoordinator?.let { exportUi ->
-            DialogExportM4AAudio(
+            DialogReaderExportM4a(
                 exportUi = exportUi,
                 onCancelExport = {
                     ctx.startService(
@@ -1236,48 +1259,8 @@ fun TextInputTab(
                 },
             )
         }
-        DialogStoryPicker(
-            visible = libraryStoryPickerOpen,
-            onDismissRequest = {
-                libraryStoryPickerLoadJob.value?.cancel()
-                libraryStoryPickerOpen = false
-                libraryStoryPickerCategoryId = null
-            },
-            categoryTitle = libraryStoryPickerCategoryTitle,
-            loading = libraryStoryPickerLoading,
-            stories = libraryStoryPickerStories,
-            categoryId = libraryStoryPickerCategoryId,
-            currentStoryId = activeLibraryStoryId,
-            onStorySelected = { id ->
-                if (paragraphSplitMode) flushParagraphParentPersist()
-                libraryStoryPickerOpen = false
-                libraryStoryPickerCategoryId = null
-                onOpenLibraryStory(id)
-            },
-            onMoveStoryOrder = { storyId, delta ->
-                scope.launch {
-                    val cid = libraryStoryPickerCategoryId ?: return@launch
-                    try {
-                        withContext(Dispatchers.IO) {
-                            libraryRepository.moveStoryOrderInCategory(storyId, cid, delta)
-                        }
-                        libraryStoryPickerStories =
-                            withContext(Dispatchers.IO) {
-                                libraryRepository.listStories(cid)
-                            }
-                        onLibraryDataChanged()
-                    } catch (e: Exception) {
-                        Toast.makeText(
-                            ctx,
-                            e.message ?: "Không đổi được thứ tự",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                }
-            },
-        )
         if (showNewLibraryStoryDialog) {
-            DialogTextTabNewLibraryStory(
+            DialogReaderNewLibraryStory(
                 categories = newStoryCategories,
                 newCategoryNameDraft = newStoryNewCategoryName,
                 onNewCategoryNameDraftChange = { newStoryNewCategoryName = it },
@@ -1317,10 +1300,7 @@ fun TextInputTab(
                                 withContext(Dispatchers.IO) {
                                     libraryRepository.insertStory(catId, title, "")
                                 }
-                            prefs
-                                .edit()
-                                .putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
-                                .commit()
+                            prefs.clearLastReadingBookmark()
                             onSavedLibraryStory(newId)
                             onTextChange(canonicalTextFromRaw(""))
                             onLibraryDataChanged()
@@ -1342,14 +1322,14 @@ fun TextInputTab(
             )
         }
         moveCategoryTarget?.let { st ->
-            DialogTextTabMoveStoryCategory(
+            DialogReaderMoveStoryCategory(
                 story = st,
                 moveCategoryCategories = moveCategoryCategories,
                 moveStoryTitleDraft = moveStoryTitleDraft,
                 onMoveStoryTitleDraftChange = { moveStoryTitleDraft = it },
                 onDismissRequest = { moveCategoryTarget = null },
                 onSaveTitleClick = {
-                    launchRenameStoryInMoveCategoryDialog(
+                    launchReaderRenameStoryInMoveCategory(
                         scope = scope,
                         context = ctx,
                         storyId = st.id,
@@ -1550,6 +1530,25 @@ fun TextInputTab(
                         fontFamily = editorAppearance.paragraphEditorFontFamily,
                     )
                 }
+            val paragraphOutlineEditTextStyle =
+                remember(
+                    editorAppearance.editorBodyStyle,
+                    editorAppearance.paragraphEditorFontFamily,
+                    editorAppearance.editorLineSpacingMultiplier,
+                ) {
+                    editorAppearance.editorBodyStyle.copy(
+                        fontFamily = editorAppearance.paragraphEditorFontFamily,
+                        lineHeight =
+                            editorLineHeightSp(
+                                editorAppearance.editorBodyStyle,
+                                editorAppearance.editorLineSpacingMultiplier,
+                            ),
+                    )
+                }
+            val paragraphCellSentenceLabelStyle =
+                MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = editorAppearance.paragraphEditorFontFamily,
+                )
             val flatCellTtsStart =
                 remember(flatCellTexts) { ttsParagraphStartIndexForEachFlatCell(flatCellTexts) }
             val flatMainSubPairs =
@@ -1585,6 +1584,7 @@ fun TextInputTab(
                         val p = flatMainSubPairs.getOrNull(flatIdx)
                         if (p != null) "${p.first}_${p.second}" else "missing_$flatIdx"
                     },
+                    contentType = { _ -> "paragraphCell" },
                 ) { flatIdx ->
                     val pair = flatMainSubPairs.getOrNull(flatIdx) ?: return@items
                     val (mainIdx, subIdx) = pair
@@ -1599,13 +1599,12 @@ fun TextInputTab(
                     val cellFocusRequester = remember(flatIdx) { FocusRequester() }
                     LaunchedEffect(
                         paragraphSplitMode,
-                        flatItemCount,
                         focusedParagraphIndex,
                         paragraphFocusRequestToken,
                         textEditorChromeViewOnly,
                         flatIdx,
                     ) {
-                        if (!paragraphSplitMode || flatItemCount <= 0) return@LaunchedEffect
+                        if (!paragraphSplitMode || flatMainSubPairs.isEmpty()) return@LaunchedEffect
                         if (focusedParagraphIndex != flatIdx) return@LaunchedEffect
                         try {
                             cellFocusRequester.requestFocus()
@@ -1614,7 +1613,8 @@ fun TextInputTab(
                         }
                     }
                     val cellParagraphInteractionSource = remember { MutableInteractionSource() }
-                    if (!textEditorChromeViewOnly) {
+                    // Chỉ ô đang focus lắng nghe interaction — tránh N coroutine collect trên danh sách dài.
+                    if (!textEditorChromeViewOnly && focusedParagraphIndex == flatIdx) {
                         LaunchedEffect(cellParagraphInteractionSource, flatIdx, paragraphSplitMode) {
                             if (!paragraphSplitMode) return@LaunchedEffect
                             cellParagraphInteractionSource.interactions.collect { interaction ->
@@ -1728,15 +1728,7 @@ fun TextInputTab(
                                     value = para,
                                     readOnly = false,
                                     interactionSource = cellParagraphInteractionSource,
-                                    textStyle =
-                                        editorAppearance.editorBodyStyle.copy(
-                                            fontFamily = editorAppearance.paragraphEditorFontFamily,
-                                            lineHeight =
-                                                editorLineHeightSp(
-                                                    editorAppearance.editorBodyStyle,
-                                                    editorAppearance.editorLineSpacingMultiplier,
-                                                ),
-                                        ),
+                                    textStyle = paragraphOutlineEditTextStyle,
                                     onValueChange = outVc@{ newVal ->
                                         val old = para
                                         if (flatIdx > 0 &&
@@ -1765,7 +1757,13 @@ fun TextInputTab(
                                             .heightIn(max = 320.dp)
                                             .focusRequester(cellFocusRequester)
                                             .onFocusChanged { fs ->
-                                                if (fs.isFocused) focusedParagraphIndex = flatIdx
+                                                if (fs.isFocused) {
+                                                    focusedParagraphIndex = flatIdx
+                                                    persistLastReadingBookmarkFromEditorFieldFlat(
+                                                        latestParagraphFieldGroups,
+                                                        flatIdx,
+                                                    )
+                                                }
                                             }
                                             .onPreviewKeyEvent { ev ->
                                                 if (ev.type != KeyEventType.KeyDown) {
@@ -1784,17 +1782,14 @@ fun TextInputTab(
                                     label = {
                                         Text(
                                             "Câu ${subIdx + 1}",
-                                            style =
-                                                MaterialTheme.typography.labelSmall.copy(
-                                                    fontFamily = editorAppearance.paragraphEditorFontFamily,
-                                                ),
+                                            style = paragraphCellSentenceLabelStyle,
                                         )
                                     },
-                                    minLines = 2,
+                                    minLines = 1,
                                     colors = OutlinedTextFieldDefaults.colors(),
                                 )
                             }
-                            if (!textEditorChromeViewOnly) {
+                            if (!textEditorChromeViewOnly && focusedParagraphIndex == flatIdx) {
                             Column(
                                 modifier = Modifier.padding(top = 6.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -2092,5 +2087,67 @@ fun TextInputTab(
                 }
             }
         }
+    }
+    DialogReaderStoryPicker(
+        visible = libraryStoryPickerOpen,
+        onDismissRequest = {
+            libraryStoryPickerLoadJob.value?.cancel()
+            libraryStoryPickerOpen = false
+            libraryStoryPickerCategoryId = null
+        },
+        categoryTitle = libraryStoryPickerCategoryTitle,
+        loading = libraryStoryPickerLoading,
+        stories = libraryStoryPickerStories,
+        categoryId = libraryStoryPickerCategoryId,
+        currentStoryId = activeLibraryStoryId,
+        onStorySelected = { id ->
+            if (paragraphSplitMode) flushParagraphParentPersist()
+            libraryStoryPickerOpen = false
+            libraryStoryPickerCategoryId = null
+            onOpenLibraryStory(id)
+        },
+        onMoveStoryOrder = { storyId, delta ->
+            scope.launch {
+                val cid = libraryStoryPickerCategoryId ?: return@launch
+                try {
+                    withContext(Dispatchers.IO) {
+                        libraryRepository.moveStoryOrderInCategory(storyId, cid, delta)
+                    }
+                    libraryStoryPickerStories =
+                        withContext(Dispatchers.IO) {
+                            libraryRepository.listStories(cid)
+                        }
+                    onLibraryDataChanged()
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        ctx,
+                        e.message ?: "Không đổi được thứ tự",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        },
+        onDeleteStory = { storyId ->
+            scope.launch {
+                val cid = libraryStoryPickerCategoryId ?: return@launch
+                try {
+                    withContext(Dispatchers.IO) {
+                        libraryRepository.deleteStory(storyId)
+                    }
+                    libraryStoryPickerStories =
+                        withContext(Dispatchers.IO) {
+                            libraryRepository.listStories(cid)
+                        }
+                    onLibraryDataChanged()
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        ctx,
+                        e.message ?: "Không xóa được truyện",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        },
+    )
     }
 }

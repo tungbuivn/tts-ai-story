@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import android.content.Context
 import android.widget.Toast
@@ -9,7 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-internal fun launchRenameStoryInMoveCategoryDialog(
+internal fun launchReaderRenameStoryInMoveCategory(
     scope: CoroutineScope,
     context: Context,
     storyId: Long,

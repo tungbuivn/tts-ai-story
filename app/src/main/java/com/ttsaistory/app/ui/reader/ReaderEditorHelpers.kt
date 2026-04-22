@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import android.widget.EditText
 import androidx.compose.ui.text.TextRange
@@ -56,7 +56,7 @@ fun fullTextBlockCaretForToolbar(
 }
 
 /** Đăng ký xuống bottom bar: slider ô đoạn, dán, con trỏ trái/phải, cuộn đầu/cuối (tách đoạn) hoặc con trỏ đầu/cuối (toàn bộ). */
-data class TextTabBottomNavBridge(
+data class ReaderBottomNavBridge(
     val paragraphSplitMode: Boolean,
     /** false khi chỉ xem: ẩn nút dán và bước con trỏ trái/phải trên bottom bar. */
     val showPasteAndCaretStep: Boolean,

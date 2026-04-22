@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import androidx.compose.ui.text.input.TextFieldValue
 import com.ttsaistory.app.domain.sanitizeParagraphText

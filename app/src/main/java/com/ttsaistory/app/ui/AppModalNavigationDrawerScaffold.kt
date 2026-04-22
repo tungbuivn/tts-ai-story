@@ -3,15 +3,12 @@ package com.ttsaistory.app.ui
 import android.content.SharedPreferences
 import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.filled.DynamicFeed
@@ -20,7 +17,6 @@ import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.FontDownload
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -36,14 +32,12 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
@@ -52,16 +46,15 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import com.ttsaistory.app.BuildConfig
 import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.elevenlabs.ElevenLabsPrefKeys
 import com.ttsaistory.app.model.LibraryCategoryToolbarCommand
 import com.ttsaistory.app.model.TextTabSpeechEngine
 import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.library.LibraryTab
-import com.ttsaistory.app.ui.tab.AppMainBottomBar
-import com.ttsaistory.app.ui.tab.TextInputTab
-import com.ttsaistory.app.ui.tab.TextTabBottomNavBridge
+import com.ttsaistory.app.ui.reader.MainBottomBar
+import com.ttsaistory.app.ui.reader.ReaderTab
+import com.ttsaistory.app.ui.reader.ReaderBottomNavBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -82,7 +75,7 @@ fun AppModalNavigationDrawerScaffold(
     prefs: SharedPreferences,
     text: String,
     speakingParagraphIndex: Int,
-    textTabBottomNavBridge: TextTabBottomNavBridge?,
+    readerBottomNavBridge: ReaderBottomNavBridge?,
     storyLibrary: StoryLibraryRepository,
     libraryRefreshTrigger: Int,
     libraryToolbarCommand: LibraryCategoryToolbarCommand?,
@@ -103,7 +96,7 @@ fun AppModalNavigationDrawerScaffold(
     onLibraryDataChanged: () -> Unit,
     onSavedLibraryStoryFromEditor: (Long) -> Unit,
     onRegisterParagraphDraftFlush: ((() -> Unit) -> Unit)?,
-    onRegisterTextTabBottomNav: ((TextTabBottomNavBridge?) -> Unit)?,
+    onRegisterReaderBottomNav: ((ReaderBottomNavBridge?) -> Unit)?,
     systemTtsSpeechRate: Float,
     systemTtsPitch: Float,
     onPlayCategoryFromLibrary: (Long) -> Unit,
@@ -283,11 +276,11 @@ fun AppModalNavigationDrawerScaffold(
                 )
             },
             bottomBar = {
-                AppMainBottomBar(
+                MainBottomBar(
                     tabIndex = tabIndex,
                     text = text,
                     speakingParagraphIndex = speakingParagraphIndex,
-                    textTabBottomNavBridge = textTabBottomNavBridge,
+                    readerBottomNavBridge = readerBottomNavBridge,
                     librarySyncEpoch = librarySyncEpoch,
                     activeLibraryStoryId = activeLibraryStoryId,
                 )
@@ -350,7 +343,7 @@ fun AppModalNavigationDrawerScaffold(
                 ) {
                     when (tabIndex) {
                         0 ->
-                            TextInputTab(
+                            ReaderTab(
                                 modifier = Modifier.fillMaxSize(),
                                 prefs = prefs,
                                 text = text,
@@ -379,7 +372,7 @@ fun AppModalNavigationDrawerScaffold(
                                 onSavedLibraryStory = onSavedLibraryStoryFromEditor,
                                 onOpenLibraryStory = onOpenStoryFromLibrary,
                                 onRegisterParagraphDraftFlush = onRegisterParagraphDraftFlush,
-                                onRegisterTextTabBottomNav = onRegisterTextTabBottomNav,
+                                onRegisterReaderBottomNav = onRegisterReaderBottomNav,
                                 systemTtsSpeechRate = systemTtsSpeechRate,
                                 systemTtsPitch = systemTtsPitch,
                             )
@@ -403,50 +396,6 @@ fun AppModalNavigationDrawerScaffold(
     }
 
     if (showAboutDialog) {
-        AlertDialog(
-            onDismissRequest = { showAboutDialog = false },
-            title = { Text("Giới thiệu") },
-            text = {
-                Column(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 360.dp)
-                            .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    horizontalAlignment = Alignment.Start,
-                ) {
-                    Text(
-                        text = "TTS AI Story",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = scheme.onSurface,
-                    )
-                    Text(
-                        text =
-                            "Phiên bản ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})" +
-                                if (BuildConfig.DEBUG) " · debug" else "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = scheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text =
-                            "Soạn và nghe văn bản bằng TTS hệ thống hoặc ElevenLabs, " +
-                                "lưu thư viện theo thể loại, import thư mục từ bộ nhớ và đồng bộ lại khi cần.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = scheme.onSurface,
-                    )
-                    Text(
-                        text = "Ứng dụng chạy trên thiết bị của bạn; dữ liệu thư viện nằm trong không gian lưu của app.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = scheme.onSurfaceVariant,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showAboutDialog = false }) {
-                    Text("Đóng")
-                }
-            },
-        )
+        DialogAppAbout(onDismissRequest = { showAboutDialog = false })
     }
 }

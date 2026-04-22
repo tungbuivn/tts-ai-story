@@ -58,12 +58,8 @@ import com.ttsaistory.app.domain.parseHttpUrlFromSharedText
 import com.ttsaistory.app.domain.parseTtsParagraphIndex
 import com.ttsaistory.app.domain.persistInboundSharedTextToLibrary
 import com.ttsaistory.app.domain.persistOpenedTextFileToLibrary
-import com.ttsaistory.app.domain.importEpubChaptersAsNumberedTxtFiles
-import com.ttsaistory.app.domain.extractZipContentToDirectory
 import com.ttsaistory.app.domain.readSendStreamAsText
 import com.ttsaistory.app.domain.resolveDocumentDisplayName
-import com.ttsaistory.app.domain.safeCategoryNameFromEpubDisplayName
-import com.ttsaistory.app.domain.safeCategoryNameFromZipDisplayName
 import com.ttsaistory.app.domain.uriLooksLikeEpubArchive
 import com.ttsaistory.app.domain.uriLooksLikeZipArchive
 import com.ttsaistory.app.domain.shouldTreatViewUriAsTxt
@@ -71,6 +67,9 @@ import com.ttsaistory.app.domain.splitIntoParagraphs
 import com.ttsaistory.app.domain.sanitizeParagraphText
 import com.ttsaistory.app.model.AppEditorConstants
 import com.ttsaistory.app.model.AppPreferenceKeys
+import com.ttsaistory.app.model.clearLastReadingBookmark
+import com.ttsaistory.app.model.lastReadingBookmarkAppliesToStory
+import com.ttsaistory.app.model.putLastReadingBookmark
 import com.ttsaistory.app.model.InboundLibraryPersistResult
 import com.ttsaistory.app.model.LibraryCategoryToolbarCommand
 import com.ttsaistory.app.model.TextTabSpeechEngine
@@ -79,24 +78,20 @@ import com.ttsaistory.app.ui.library.OpenFileProgressLogDialog
 import com.ttsaistory.app.ui.library.OpenFileProgressLogUi
 import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.fonts.EditorFontConfigDialog
-import com.ttsaistory.app.ui.tab.StoryReadingProgressGlobal
-import com.ttsaistory.app.ui.tab.SystemTtsSettingsScreen
-import com.ttsaistory.app.ui.tab.TextTabBottomNavBridge
+import com.ttsaistory.app.ui.reader.ReaderReadingProgress
+import com.ttsaistory.app.ui.reader.SystemTtsSettingsScreen
+import com.ttsaistory.app.ui.reader.ReaderBottomNavBridge
 import com.ttsaistory.app.model.saveLastText
 import com.ttsaistory.app.speech.ElevenLabsParagraphSpeechEngine
 import com.ttsaistory.app.speech.ParagraphSpeechEngines
 import com.ttsaistory.app.speech.ParagraphSpeechSequenceCallbacks
 import com.ttsaistory.app.speech.SystemParagraphSpeechEngine
 import com.ttsaistory.app.speech.SystemTtsUtteranceProgressSink
-import java.io.File
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -107,6 +102,8 @@ fun AppTabs() {
     LaunchedEffect(Unit) {
         AnrDiagLog.i("AppTabs first composition")
     }
+
+    // --- Trạng thái tab, thư viện, tiến độ nhập tệp ---
     var tabIndex by remember { mutableIntStateOf(0) }
     var elevenLabsSettingsVisible by remember { mutableStateOf(false) }
     var systemTtsSettingsVisible by remember { mutableStateOf(false) }
@@ -151,6 +148,12 @@ fun AppTabs() {
                 Unit
             }
         }
+    val safArchiveImportLogBridge =
+        OpenFileProgressLogBridge(
+            importProgressMainHandler,
+            getLog = { openFileProgressLog },
+            setLog = { openFileProgressLog = it },
+        )
     val latestActiveLibraryStoryId by rememberUpdatedState(activeLibraryStoryId)
     val latestTextForLibraryAutosave by rememberUpdatedState(text)
     val latestLibraryStoryId by rememberUpdatedState(activeLibraryStoryId)
@@ -168,27 +171,47 @@ fun AppTabs() {
             }
         }
     var prevLibrarySidForAutosave by remember { mutableStateOf<Long?>(null) }
-    /** Gọi [flushParagraphParentPersist] từ [TextInputTab] trước khi ghi file thư viện / nhận share. */
+    /** Gọi [flushParagraphParentPersist] từ [ReaderTab] trước khi ghi file thư viện / nhận share. */
     var paragraphDraftFlush by remember { mutableStateOf<(() -> Unit)?>(null) }
     /** Tab Text: cuộn đầu/cuối danh sách đoạn hoặc con trỏ đầu/cuối (chế độ toàn bộ). */
-    var textTabBottomNavBridge by remember { mutableStateOf<TextTabBottomNavBridge?>(null) }
-    /** Đồng bộ bookmark prefs → [StoryReadingProgressGlobal] để mọi @Composable đọc [.intValue]. */
-    DisposableEffect(prefs) {
-        val key = AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX
+    var readerBottomNavBridge by remember { mutableStateOf<ReaderBottomNavBridge?>(null) }
+    /** Đồng bộ bookmark prefs → [ReaderReadingProgress] để mọi @Composable đọc [.intValue]. */
+    DisposableEffect(prefs, activeLibraryStoryId) {
+        val paragraphKey = AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX
+        val storyKey = AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_STORY_ID
         val listener =
             SharedPreferences.OnSharedPreferenceChangeListener { _, changedKey ->
-                if (changedKey == null || changedKey == key) {
-                    StoryReadingProgressGlobal.currentSentenceIndex0Based.intValue = prefs.getInt(key, -1)
+                if (changedKey == null || changedKey == paragraphKey || changedKey == storyKey) {
+                    val idx = prefs.getInt(paragraphKey, -1)
+                    ReaderReadingProgress.currentSentenceIndex0Based.intValue =
+                        if (idx >= 0 && prefs.lastReadingBookmarkAppliesToStory(activeLibraryStoryId)) {
+                            idx
+                        } else {
+                            -1
+                        }
                 }
             }
         prefs.registerOnSharedPreferenceChangeListener(listener)
-        StoryReadingProgressGlobal.currentSentenceIndex0Based.intValue = prefs.getInt(key, -1)
+        val idx = prefs.getInt(paragraphKey, -1)
+        ReaderReadingProgress.currentSentenceIndex0Based.intValue =
+            if (idx >= 0 && prefs.lastReadingBookmarkAppliesToStory(activeLibraryStoryId)) {
+                idx
+            } else {
+                -1
+            }
         onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
     LaunchedEffect(activeLibraryStoryId, librarySyncEpoch) {
-        StoryReadingProgressGlobal.currentSentenceIndex0Based.intValue =
-            prefs.getInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
+        val idx = prefs.getInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
+        ReaderReadingProgress.currentSentenceIndex0Based.intValue =
+            if (idx >= 0 && prefs.lastReadingBookmarkAppliesToStory(activeLibraryStoryId)) {
+                idx
+            } else {
+                -1
+            }
     }
+
+    // --- Mở tài liệu SAF (ZIP/EPUB: [importOpenedZipArchiveFromSaf], [importOpenedEpubArchiveFromSaf]) ---
     val openTextDocumentLauncher =
         rememberLauncherForActivityResult(
             contract = ActivityResultContracts.OpenDocument(),
@@ -196,212 +219,7 @@ fun AppTabs() {
                 if (uri == null) return@rememberLauncherForActivityResult
                 coroutineScope.launch {
                     try {
-                        suspend fun importOpenedZipArchiveFromSaf(
-                            pickedUri: Uri,
-                            resolvedDisplayName: String?,
-                        ) {
-                            importProgressMainHandler.post {
-                                openFileProgressLog =
-                                    openFileProgressLog?.copy(
-                                        message = "Đang chuẩn bị và đọc ZIP…",
-                                        progressCompleted = false,
-                                    )
-                            }
-                            withContext(Dispatchers.IO) {
-                                val catName =
-                                    safeCategoryNameFromZipDisplayName(
-                                        resolvedDisplayName ?: "archive.zip",
-                                    )
-                                val extractRoot =
-                                    storyLibrary.prepareZipImportExtractDirectory(catName)
-                                val categoryId =
-                                    storyLibrary.getOrCreateCategoryByName(catName)
-                                val extractRootCanon = extractRoot.canonicalFile
-                                val usedTitles = mutableSetOf<String>()
-                                val importedStoryCount = AtomicInteger(0)
-                                coroutineScope {
-                                    val importQueue = Channel<Pair<String, File>>(Channel.UNLIMITED)
-                                    val importWorker =
-                                        launch {
-                                            for ((label, file) in importQueue) {
-                                                val added =
-                                                    storyLibrary.importSingleLocalFileAsStoryIfText(
-                                                        categoryId,
-                                                        extractRootCanon,
-                                                        file,
-                                                        usedTitles,
-                                                    )
-                                                if (added) importedStoryCount.incrementAndGet()
-                                                importProgressMainHandler.post {
-                                                    if (label.isNotEmpty()) {
-                                                        openFileProgressLog =
-                                                            openFileProgressLog?.copy(
-                                                                message =
-                                                                    if (added) {
-                                                                        "Đã nhập: $label"
-                                                                    } else {
-                                                                        "Đã giải nén (bỏ qua / không phải văn): $label"
-                                                                    },
-                                                            )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    try {
-                                        extractZipContentToDirectory(
-                                            activity,
-                                            pickedUri,
-                                            extractRoot,
-                                            onFileExtracted = { _, entryName ->
-                                                val label = entryName.trim()
-                                                val file = File(extractRoot, entryName)
-                                                // importProgressMainHandler.post {
-                                                //     if (label.isNotEmpty()) {
-                                                //         openFileProgressLog =
-                                                //             openFileProgressLog?.copy(
-                                                //                 message = "Đang giải nén: $label",
-                                                                
-                                                //             )
-                                                //     }
-                                                // }
-                                                check(importQueue.trySend(label to file).isSuccess) {
-                                                    "Không đưa được file vào hàng đợi nhập"
-                                                }
-                                            },
-                                        )
-                                    } finally {
-                                        importQueue.close()
-                                    }
-                                    importWorker.join()
-                                }
-                                importProgressMainHandler.post {
-                                    openFileProgressLog =
-                                        openFileProgressLog?.copy(progressCompleted = true)
-                                }
-                                if (importedStoryCount.get() == 0) {
-                                    error("Không có file nào có nội dung sau khi chuẩn hoá")
-                                }
-                                storyLibrary.setCategoryImportFolderTreeUri(
-                                    categoryId,
-                                    Uri.fromFile(extractRoot.canonicalFile).toString(),
-                                )
-                            }
-                            importProgressMainHandler.post { openFileProgressLog = null }
-                            libraryRefreshTrigger++
-                            tabIndex = 1
-                        }
-
-                        suspend fun importOpenedEpubArchiveFromSaf(
-                            pickedUri: Uri,
-                            resolvedDisplayName: String?,
-                        ) {
-                            importProgressMainHandler.post {
-                                openFileProgressLog =
-                                    openFileProgressLog?.copy(
-                                        message = "Đang chuẩn bị và đọc EPUB…",
-                                        progressCompleted = false,
-                                    )
-                            }
-                            val (epubCategoryName, importedCount) =
-                                withContext(Dispatchers.IO) {
-                                    val catName =
-                                        safeCategoryNameFromEpubDisplayName(
-                                            resolvedDisplayName ?: "book.epub",
-                                        )
-                                    val extractRoot =
-                                        storyLibrary.prepareZipImportExtractDirectory(catName)
-                                    val categoryId =
-                                        storyLibrary.getOrCreateCategoryByName(catName)
-                                    val extractRootCanon = extractRoot.canonicalFile
-                                    val usedTitles = mutableSetOf<String>()
-                                    val importedStoryCount = AtomicInteger(0)
-                                    coroutineScope {
-                                        val importQueue = Channel<Pair<String, File>>(Channel.UNLIMITED)
-                                        val importWorker =
-                                            launch {
-                                                for ((label, file) in importQueue) {
-                                                    val isNumberedChapter =
-                                                        file.name.length == 12 &&
-                                                            file.name.endsWith(".txt", ignoreCase = true) &&
-                                                            file.name.take(8).all { it.isDigit() }
-                                                    val added =
-                                                        storyLibrary.importSingleLocalFileAsStoryIfText(
-                                                            categoryId,
-                                                            extractRootCanon,
-                                                            file,
-                                                            usedTitles,
-                                                            storyTitleOverride =
-                                                                if (isNumberedChapter) {
-                                                                    file.name.take(8)
-                                                                } else {
-                                                                    null
-                                                                },
-                                                        )
-                                                    if (added) importedStoryCount.incrementAndGet()
-                                                    importProgressMainHandler.post {
-                                                        if (label.isNotEmpty()) {
-                                                            openFileProgressLog =
-                                                                openFileProgressLog?.copy(
-                                                                    message =
-                                                                        if (added) {
-                                                                            "Đã nhập: $label"
-                                                                        } else {
-                                                                            "Đã ghi (bỏ qua / không phải văn): $label"
-                                                                        },
-                                                                )
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        try {
-                                            importEpubChaptersAsNumberedTxtFiles(
-                                                activity,
-                                                pickedUri,
-                                                extractRoot,
-                                                onProgress = { pathInZip ->
-                                                    importProgressMainHandler.post {
-                                                        val short =
-                                                            pathInZip
-                                                                .substringAfterLast('/')
-                                                                .ifBlank { pathInZip }
-                                                        openFileProgressLog =
-                                                            openFileProgressLog?.copy(
-                                                                message = "Đang trích chương EPUB: $short",
-                                                            )
-                                                    }
-                                                },
-                                                onChapterFileWritten = { fileName, file ->
-                                                    check(
-                                                        importQueue.trySend(fileName to file).isSuccess,
-                                                    ) {
-                                                        "Không đưa được file vào hàng đợi nhập"
-                                                    }
-                                                },
-                                            )
-                                        } finally {
-                                            importQueue.close()
-                                        }
-                                        importWorker.join()
-                                    }
-                                    importProgressMainHandler.post {
-                                        openFileProgressLog =
-                                            openFileProgressLog?.copy(progressCompleted = true)
-                                    }
-                                    if (importedStoryCount.get() == 0) {
-                                        error("Không có file nào có nội dung sau khi chuẩn hoá")
-                                    }
-                                    storyLibrary.setCategoryImportFolderTreeUri(
-                                        categoryId,
-                                        Uri.fromFile(extractRoot.canonicalFile).toString(),
-                                    )
-                                    catName to importedStoryCount.get()
-                                }
-                            Toast.makeText(
-                                activity,
-                                "Đã import $importedCount chương EPUB vào thể loại \"$epubCategoryName\".",
-                                Toast.LENGTH_LONG,
-                            ).show()
-                            importProgressMainHandler.post { openFileProgressLog = null }
+                        fun goToLibraryAfterSafImport() {
                             libraryRefreshTrigger++
                             tabIndex = 1
                         }
@@ -432,11 +250,25 @@ fun AppTabs() {
                                 message = "Đang xử lý…",
                             )
                         if (uriLooksLikeEpubArchive(activity, uri, displayName)) {
-                            importOpenedEpubArchiveFromSaf(uri, displayName)
+                            importOpenedEpubArchiveFromSaf(
+                                activity,
+                                storyLibrary,
+                                uri,
+                                displayName,
+                                safArchiveImportLogBridge,
+                                onFinishedGoToLibraryTab = ::goToLibraryAfterSafImport,
+                            )
                             return@launch
                         }
                         if (uriLooksLikeZipArchive(activity, uri, displayName)) {
-                            importOpenedZipArchiveFromSaf(uri, displayName)
+                            importOpenedZipArchiveFromSaf(
+                                activity,
+                                storyLibrary,
+                                uri,
+                                displayName,
+                                safArchiveImportLogBridge,
+                                onFinishedGoToLibraryTab = ::goToLibraryAfterSafImport,
+                            )
                             return@launch
                         }
                         importProgressMainHandler.post { openFileProgressLog = null }
@@ -462,10 +294,7 @@ fun AppTabs() {
                                 )
                             text = r.cleanedText
                             prefs.saveLastText(r.cleanedText)
-                            prefs
-                                .edit()
-                                .putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
-                                .commit()
+                            prefs.clearLastReadingBookmark()
                             activeLibraryStoryId = r.storyId
                             librarySyncEpoch++
                             libraryRefreshTrigger++
@@ -493,6 +322,8 @@ fun AppTabs() {
                 }
             },
         )
+
+    // --- Nhập cả thư mục (document tree) ---
     val openImportFolderTreeLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             if (uri == null) return@rememberLauncherForActivityResult
@@ -622,6 +453,7 @@ fun AppTabs() {
     var elevenLabsPlayJob by remember { mutableStateOf<Job?>(null) }
     val latestTextTabSpeechEngine by rememberUpdatedState(textTabSpeechEngine)
 
+    // --- Intent SEND / VIEW / PROCESS_TEXT → thư viện ---
     DisposableEffect(activity, coroutineScope) {
         val flushCurrentOpenLibraryStoryBeforeInboundImport: suspend () -> Unit = {
             libraryFileAutosaveHolder.job?.cancel()
@@ -648,10 +480,7 @@ fun AppTabs() {
         fun commitInboundPersistResult(r: InboundLibraryPersistResult) {
             text = r.cleanedText
             prefs.saveLastText(r.cleanedText)
-            prefs
-                .edit()
-                .putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
-                .commit()
+            prefs.clearLastReadingBookmark()
             activeLibraryStoryId = r.storyId
             librarySyncEpoch++
             libraryRefreshTrigger++
@@ -904,6 +733,7 @@ fun AppTabs() {
         onDispose { activity.lifecycle.removeObserver(observer) }
     }
 
+    // --- TTS hệ thống, ElevenLabs, đọc theo đoạn, wake lock / màn hình ---
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
     var ttsReady by remember { mutableStateOf(false) }
     var voices by remember { mutableStateOf<List<Voice>>(emptyList()) }
@@ -1008,12 +838,13 @@ fun AppTabs() {
     fun persistBookmarkIfSpeaking() {
         val idx = speakingParagraphIndex
         if (idx < 0) return
-        prefs.edit().putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, idx).apply()
         val sid = latestActiveLibraryStoryId
         if (sid != null) {
             coroutineScope.launch(Dispatchers.IO) {
                 storyLibrary.updateLastSpeechSentenceIndex(sid, idx)
             }
+        } else {
+            prefs.edit().putLastReadingBookmark(idx, null).apply()
         }
     }
 
@@ -1060,12 +891,13 @@ fun AppTabs() {
 
     LaunchedEffect(speakingParagraphIndex, activeLibraryStoryId) {
         if (speakingParagraphIndex >= 0) {
-            prefs.edit().putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, speakingParagraphIndex).apply()
             val sid = activeLibraryStoryId
             if (sid != null) {
                 withContext(Dispatchers.IO) {
                     storyLibrary.updateLastSpeechSentenceIndex(sid, speakingParagraphIndex)
                 }
+            } else {
+                prefs.edit().putLastReadingBookmark(speakingParagraphIndex, null).apply()
             }
         }
     }
@@ -1210,10 +1042,7 @@ fun AppTabs() {
                 val cleaned = canonicalTextFromRaw(nextBody)
                 text = cleaned
                 prefs.saveLastText(cleaned)
-                prefs
-                    .edit()
-                    .putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
-                    .commit()
+                prefs.clearLastReadingBookmark()
                 activeLibraryStoryId = nextRow.id
                 librarySyncEpoch++
                 libraryRefreshTrigger++
@@ -1318,10 +1147,7 @@ fun AppTabs() {
                 val cleaned = canonicalTextFromRaw(merged)
                 text = cleaned
                 prefs.saveLastText(cleaned)
-                prefs
-                    .edit()
-                    .putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
-                    .commit()
+                prefs.clearLastReadingBookmark()
                 activeLibraryStoryId = null
                 tabIndex = 0
                 val paras = splitIntoParagraphs(cleaned)
@@ -1340,6 +1166,7 @@ fun AppTabs() {
         }
     }
 
+    // --- Scaffold + hộp thoại font / cài đặt giọng ---
     Box(modifier = Modifier.fillMaxSize()) {
         AppModalNavigationDrawerScaffold(
             drawerState = drawerState,
@@ -1372,7 +1199,7 @@ fun AppTabs() {
             prefs = prefs,
             text = text,
             speakingParagraphIndex = speakingParagraphIndex,
-            textTabBottomNavBridge = textTabBottomNavBridge,
+            readerBottomNavBridge = readerBottomNavBridge,
             storyLibrary = storyLibrary,
             libraryRefreshTrigger = libraryRefreshTrigger,
             libraryToolbarCommand = libraryToolbarCommand,
@@ -1444,8 +1271,8 @@ fun AppTabs() {
             onRegisterParagraphDraftFlush = { flush ->
                 paragraphDraftFlush = flush
             },
-            onRegisterTextTabBottomNav = { bridge ->
-                textTabBottomNavBridge = bridge
+            onRegisterReaderBottomNav = { bridge ->
+                readerBottomNavBridge = bridge
             },
             systemTtsSpeechRate = systemTtsSpeechRate,
             systemTtsPitch = systemTtsPitch,
@@ -1475,7 +1302,7 @@ fun AppTabs() {
                     val savedIdx = row?.lastSpeechSentenceIndex ?: -1
                     prefs
                         .edit()
-                        .putInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, savedIdx)
+                        .putLastReadingBookmark(savedIdx, storyId)
                         .commit()
                     activeLibraryStoryId = storyId
                     librarySyncEpoch++

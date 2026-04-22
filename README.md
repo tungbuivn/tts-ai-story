@@ -115,7 +115,7 @@ Cài file APK debug sinh ra dưới `app/build/outputs/apk/debug/`.
 
 ## Ghi chú cho dev
 
-- UI chính: `AppTabs.kt` → `AppModalNavigationDrawerScaffold.kt` (drawer + scaffold + tab), `TextInputTab.kt`, `LibraryTab.kt`.
+- UI chính: `AppTabs.kt` → `AppModalNavigationDrawerScaffold.kt` (drawer + scaffold + tab), `ReaderTab.kt`, `LibraryTab.kt`.
 - Thư viện / DB: `StoryLibraryRepository.kt`.
 - Intent chia sẻ / VIEW: xử lý trong `MainActivity` / `AppTabs.kt` (consumer, coroutine, v.v.).
 

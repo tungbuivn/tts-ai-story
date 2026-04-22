@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import android.content.SharedPreferences
 import androidx.compose.runtime.Composable
@@ -6,13 +6,15 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.ttsaistory.app.model.AppPreferenceKeys
 
 @Stable
-internal class TextInputTabPrefsBridge(private val prefs: SharedPreferences) {
+internal class ReaderTabPrefsBridge(private val prefs: SharedPreferences) {
     private val bookmarkKey = AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX
+    private val bookmarkStoryKey = AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_STORY_ID
     private val fontKeys =
         setOf(
             AppPreferenceKeys.KEY_EDITOR_FONT_FULL_TEXT_PATH,
@@ -28,14 +30,19 @@ internal class TextInputTabPrefsBridge(private val prefs: SharedPreferences) {
     var trackedLastReadingParagraphIndex by mutableIntStateOf(prefs.getInt(bookmarkKey, -1))
         internal set
 
+    var trackedLastReadingParagraphStoryId by mutableLongStateOf(prefs.getLong(bookmarkStoryKey, -1L))
+        internal set
+
     fun refreshBookmarkFromPrefs() {
         trackedLastReadingParagraphIndex = prefs.getInt(bookmarkKey, -1)
+        trackedLastReadingParagraphStoryId = prefs.getLong(bookmarkStoryKey, -1L)
     }
 
     private val preferenceListener =
         SharedPreferences.OnSharedPreferenceChangeListener { _, changedKey ->
-            if (changedKey == null || changedKey == bookmarkKey) {
+            if (changedKey == null || changedKey == bookmarkKey || changedKey == bookmarkStoryKey) {
                 trackedLastReadingParagraphIndex = prefs.getInt(bookmarkKey, -1)
+                trackedLastReadingParagraphStoryId = prefs.getLong(bookmarkStoryKey, -1L)
             }
             if (changedKey != null && changedKey in fontKeys) {
                 fontPrefsEpoch++
@@ -45,6 +52,7 @@ internal class TextInputTabPrefsBridge(private val prefs: SharedPreferences) {
     fun register() {
         prefs.registerOnSharedPreferenceChangeListener(preferenceListener)
         trackedLastReadingParagraphIndex = prefs.getInt(bookmarkKey, -1)
+        trackedLastReadingParagraphStoryId = prefs.getLong(bookmarkStoryKey, -1L)
     }
 
     fun unregister() {
@@ -53,8 +61,8 @@ internal class TextInputTabPrefsBridge(private val prefs: SharedPreferences) {
 }
 
 @Composable
-internal fun rememberTextInputTabPrefsBridge(prefs: SharedPreferences): TextInputTabPrefsBridge {
-    val bridge = remember(prefs) { TextInputTabPrefsBridge(prefs) }
+internal fun rememberReaderTabPrefsBridge(prefs: SharedPreferences): ReaderTabPrefsBridge {
+    val bridge = remember(prefs) { ReaderTabPrefsBridge(prefs) }
     DisposableEffect(prefs) {
         bridge.register()
         onDispose { bridge.unregister() }

@@ -20,6 +20,8 @@ import com.ttsaistory.app.domain.listImportFolderFilesSorted
 import com.ttsaistory.app.domain.readUtf8FromImportTreeEntry
 import com.ttsaistory.app.domain.readMergedUtf8FromDocumentTree
 import com.ttsaistory.app.domain.readUtf8FromDocumentUri
+import com.ttsaistory.app.model.AppPreferenceKeys
+import com.ttsaistory.app.model.putLastReadingBookmark
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -1540,6 +1542,12 @@ class StoryLibraryRepository(private val context: Context) {
         if (n <= 0) error("Không đổi tên được")
     }
 
+    /**
+     * Cập nhật `last_speech_sentence_index` trong DB và **đồng thời** prefs
+     * [AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX] +
+     * [AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_STORY_ID] (last story speaking),
+     * để sau auto-advance / mở file khác bookmark vẫn khớp đúng truyện.
+     */
     fun updateLastSpeechSentenceIndex(storyId: Long, sentenceIndex: Int) {
         val cv =
             ContentValues().apply {
@@ -1547,6 +1555,11 @@ class StoryLibraryRepository(private val context: Context) {
                 put("updated_at", System.currentTimeMillis())
             }
         helper.writableDatabase.update("saved_stories", cv, "id = ?", arrayOf(storyId.toString()))
+        context.applicationContext
+            .getSharedPreferences(AppPreferenceKeys.PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putLastReadingBookmark(sentenceIndex, storyId)
+            .apply()
     }
 
     fun deleteStory(storyId: Long) {

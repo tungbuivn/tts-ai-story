@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.tab
+package com.ttsaistory.app.ui.reader
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,7 +19,7 @@ import com.ttsaistory.app.data.LibraryCategoryRow
 import com.ttsaistory.app.data.LibraryStoryRow
 
 @Composable
-internal fun DialogTextTabMoveStoryCategory(
+internal fun DialogReaderMoveStoryCategory(
     story: LibraryStoryRow,
     moveCategoryCategories: List<LibraryCategoryRow>,
     moveStoryTitleDraft: String,

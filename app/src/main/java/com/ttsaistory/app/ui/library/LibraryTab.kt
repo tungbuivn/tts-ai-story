@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
@@ -77,6 +78,8 @@ fun LibraryTab(
     var exportFormat by remember { mutableStateOf(LibraryCategoryExportFormat.SeparateFilesInFolder) }
     /** Thể loại đang kéo đổi thứ tự — dùng để highlight dòng tương ứng. */
     var draggingCategoryId by remember { mutableStateOf<Long?>(null) }
+    /** Thể loại chứa truyện đang mở ở tab Text (null nếu không có truyện thư viện đang sửa). */
+    var categoryIdForActiveEdit by remember { mutableStateOf<Long?>(null) }
 
     fun reload() {
         scope.launch {
@@ -183,6 +186,28 @@ fun LibraryTab(
         reload()
     }
 
+    LaunchedEffect(activeEditingStoryId, refreshTrigger) {
+        val sid = activeEditingStoryId
+        categoryIdForActiveEdit =
+            if (sid == null) {
+                null
+            } else {
+                withContext(Dispatchers.IO) { repository.getStory(sid)?.categoryId }
+            }
+    }
+
+    val categoryListState = rememberLazyListState()
+
+    LaunchedEffect(categories, categoryIdForActiveEdit, activeEditingStoryId, draggingCategoryId) {
+        if (draggingCategoryId != null) return@LaunchedEffect
+        if (activeEditingStoryId == null) return@LaunchedEffect
+        val cid = categoryIdForActiveEdit ?: return@LaunchedEffect
+        val idx = categories.indexOfFirst { it.id == cid }
+        if (idx >= 0) {
+            categoryListState.animateScrollToItem(idx)
+        }
+    }
+
     LaunchedEffect(toolbarCommand) {
         when (toolbarCommand) {
             null -> Unit
@@ -200,6 +225,7 @@ fun LibraryTab(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
     ) { padding ->
         LazyColumn(
+            state = categoryListState,
             modifier =
                 Modifier
                     .fillMaxSize()
@@ -210,31 +236,41 @@ fun LibraryTab(
             
             itemsIndexed(categories, key = { _, cat -> cat.id }) { _, cat ->
                 val isDraggingThis = draggingCategoryId == cat.id
+                val highlightsEditingStoryCategory =
+                    !isDraggingThis &&
+                        activeEditingStoryId != null &&
+                        cat.id == categoryIdForActiveEdit
                 val cardShape = RoundedCornerShape(12.dp)
+                val borderModifier =
+                    when {
+                        isDraggingThis ->
+                            Modifier.border(
+                                2.dp,
+                                MaterialTheme.colorScheme.primary,
+                                cardShape,
+                            )
+                        highlightsEditingStoryCategory ->
+                            Modifier.border(
+                                2.dp,
+                                MaterialTheme.colorScheme.tertiary,
+                                cardShape,
+                            )
+                        else -> Modifier
+                    }
+                val cardContainerColor =
+                    when {
+                        isDraggingThis ->
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                        highlightsEditingStoryCategory ->
+                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+                        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                    }
                 Card(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .then(
-                                if (isDraggingThis) {
-                                    Modifier.border(
-                                        2.dp,
-                                        MaterialTheme.colorScheme.primary,
-                                        cardShape,
-                                    )
-                                } else {
-                                    Modifier
-                                },
-                            ),
+                    modifier = Modifier.fillMaxWidth().then(borderModifier),
                     shape = cardShape,
                     colors =
                         CardDefaults.cardColors(
-                            containerColor =
-                                if (isDraggingThis) {
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                                },
+                            containerColor = cardContainerColor,
                         ),
                 ) {
                     Column(
