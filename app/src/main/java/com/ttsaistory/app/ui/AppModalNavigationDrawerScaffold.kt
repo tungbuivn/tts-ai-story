@@ -15,11 +15,11 @@ import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Web
 import androidx.compose.material.icons.outlined.FontDownload
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
@@ -32,6 +32,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -50,6 +51,7 @@ import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.elevenlabs.ElevenLabsPrefKeys
 import com.ttsaistory.app.model.LibraryCategoryToolbarCommand
 import com.ttsaistory.app.model.TextTabSpeechEngine
+import com.ttsaistory.app.ui.library.DialogOnlineDomainParsersManage
 import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.library.LibraryTab
 import com.ttsaistory.app.ui.reader.MainBottomBar
@@ -116,10 +118,11 @@ fun AppModalNavigationDrawerScaffold(
     val drawerBase = lerp(scheme.primaryContainer, scheme.surfaceContainerLow, 0.22f)
     val drawerHeaderGradientEnd = lerp(scheme.primary.copy(alpha = 0.14f), drawerBase, 0.55f)
     var showAboutDialog by remember { mutableStateOf(false) }
+    var showDrawerOnlineDomainParserManage by remember { mutableStateOf(false) }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        // Tab Text: khi drawer đóng, tắt vuốt mép (trùng cuộn/chọn chữ); khi drawer mở vẫn bật cử chỉ để chạm scrim / vuốt đóng hoạt động (Material3 gắn đóng scrim với gesturesEnabled).
+        // Tab Text: khi drawer đóng, tắt vuốt mép; tab Thư viện bật; khi drawer mở luôn bật cử chỉ (scrim / vuốt đóng).
         gesturesEnabled = drawerState.isOpen || tabIndex != 0,
         drawerContent = {
             ModalDrawerSheet(
@@ -221,6 +224,19 @@ fun AppModalNavigationDrawerScaffold(
                         coroutineScope.launch {
                             drawerState.close()
                             onOpenSystemTtsFromDrawer()
+                        }
+                    },
+                )
+                NavigationDrawerItem(
+                    icon = {
+                        Icon(Icons.Filled.Web, contentDescription = null)
+                    },
+                    label = { Text("Cấu hình Parser online") },
+                    selected = false,
+                    onClick = {
+                        coroutineScope.launch {
+                            drawerState.close()
+                            showDrawerOnlineDomainParserManage = true
                         }
                     },
                 )
@@ -393,6 +409,13 @@ fun AppModalNavigationDrawerScaffold(
                 }
             }
         }
+    }
+
+    if (showDrawerOnlineDomainParserManage) {
+        DialogOnlineDomainParsersManage(
+            repository = storyLibrary,
+            onDismissRequest = { showDrawerOnlineDomainParserManage = false },
+        )
     }
 
     if (showAboutDialog) {

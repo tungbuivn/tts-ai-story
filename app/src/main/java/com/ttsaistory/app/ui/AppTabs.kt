@@ -75,6 +75,7 @@ import com.ttsaistory.app.model.LibraryCategoryToolbarCommand
 import com.ttsaistory.app.model.TextTabSpeechEngine
 import com.ttsaistory.app.ui.library.OpenFileProgressDialog
 import com.ttsaistory.app.ui.library.OpenFileProgressLogDialog
+import com.ttsaistory.app.ui.library.OnlineCategoryHeadlessStoryTextSync
 import com.ttsaistory.app.ui.library.OpenFileProgressLogUi
 import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.fonts.EditorFontConfigDialog
@@ -1280,6 +1281,28 @@ fun AppTabs() {
             onOpenStoryFromLibrary = { storyId ->
                 coroutineScope.launch {
                     stopAllSpeechReading()
+                    val rowForRefresh =
+                        withContext(Dispatchers.IO) {
+                            storyLibrary.getStory(storyId)
+                        }
+                    if (rowForRefresh != null &&
+                        storyLibrary.storyNeedsOnlineContentRefresh(rowForRefresh)
+                    ) {
+                        try {
+                            OnlineCategoryHeadlessStoryTextSync.syncOnlineStoryFromWebPage(
+                                context = context,
+                                storyId = storyId,
+                                repository = storyLibrary,
+                            )
+                            libraryRefreshTrigger++
+                        } catch (e: Exception) {
+                            Toast.makeText(
+                                context,
+                                e.message ?: "Không tải được nội dung từ web",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }
                     val body =
                         withContext(Dispatchers.IO) {
                             storyLibrary.readStoryText(storyId)
@@ -1306,6 +1329,13 @@ fun AppTabs() {
                         .commit()
                     activeLibraryStoryId = storyId
                     librarySyncEpoch++
+                    val insertedNextPlaceholder =
+                        withContext(Dispatchers.IO) {
+                            storyLibrary.ensurePlaceholderStoryForStoredOnlineNextPageUrl(storyId)
+                        }
+                    if (insertedNextPlaceholder) {
+                        libraryRefreshTrigger++
+                    }
                     tabIndex = 0
                 }
             },

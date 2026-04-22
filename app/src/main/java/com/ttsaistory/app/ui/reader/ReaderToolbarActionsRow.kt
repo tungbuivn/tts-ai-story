@@ -11,6 +11,7 @@ import androidx.compose.material.icons.automirrored.outlined.NoteAdd
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Icon
@@ -21,8 +22,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 /**
- * Cột nút công cụ tab nhập văn: xem/chỉnh sửa, phát, dừng, xuất AAC, chuyển thể loại, truyện mới;
- * kèm hàng chế độ đoạn khi đang chỉnh sửa.
+ * Cột nút công cụ tab nhập văn: xem/chỉnh sửa, phát, dừng, xuất AAC, (truyện web) tải lại nội dung,
+ * chuyển thể loại, truyện mới; kèm hàng chế độ đoạn khi đang chỉnh sửa.
  */
 @Composable
 internal fun ReaderToolbarActionsColumn(
@@ -35,6 +36,9 @@ internal fun ReaderToolbarActionsColumn(
     stopSpeechEnabled: Boolean,
     onExportM4aClick: () -> Unit,
     exportM4aEnabled: Boolean,
+    showReloadWebContent: Boolean,
+    onReloadWebContentClick: () -> Unit,
+    reloadWebContentEnabled: Boolean,
     onMoveStoryCategoryClick: () -> Unit,
     moveStoryCategoryEnabled: Boolean,
     onNewLibraryStoryClick: () -> Unit,
@@ -94,6 +98,17 @@ internal fun ReaderToolbarActionsColumn(
                     imageVector = Icons.Filled.AudioFile,
                     contentDescription = "Lưu AAC (.m4a)",
                 )
+            }
+            if (showReloadWebContent) {
+                IconButton(
+                    onClick = onReloadWebContentClick,
+                    enabled = reloadWebContentEnabled,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = "Tải lại nội dung từ web",
+                    )
+                }
             }
             Spacer(modifier = Modifier.weight(1f))
             IconButton(

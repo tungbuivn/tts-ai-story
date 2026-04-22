@@ -3,6 +3,7 @@ package com.ttsaistory.app.ui.reader
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -154,20 +155,33 @@ fun MainBottomBar(
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             tonalElevation = 2.dp,
         ) {
+            fun withWebQueueStoryIdSuffix(base: String): String {
+                if (tabIndex != 0) return base
+                val bridge = readerBottomNavBridge
+                val q = bridge?.webStoryQueueTargetStoryId
+                if (bridge?.libraryWebStoryActive != true || q == null) return base
+                return "$base (id=$q)"
+            }
             val statusLine =
                 when {
-                    progressStillLoading -> "Đang tính tiến độ…"
+                    progressStillLoading ->
+                        withWebQueueStoryIdSuffix("Đang tính tiến độ…")
+
                     totalSpeakable <= 0 ->
-                        "Chưa có câu để đọc (nội dung trống hoặc không tách được)."
+                        withWebQueueStoryIdSuffix(
+                            "Chưa có câu để đọc (nội dung trống hoặc không tách được).",
+                        )
 
                     else -> {
                         val pct = (curOneBased * 100.0) / totalSpeakable
-                        String.format(
-                            Locale.US,
-                            "%d / %d — %.2f%%",
-                            curOneBased,
-                            totalSpeakable,
-                            pct,
+                        withWebQueueStoryIdSuffix(
+                            String.format(
+                                Locale.US,
+                                "%d / %d — %.2f%%",
+                                curOneBased,
+                                totalSpeakable,
+                                pct,
+                            ),
                         )
                     }
                 }
@@ -226,6 +240,32 @@ fun MainBottomBar(
                                 Icon(
                                     imageVector = Icons.Filled.Add,
                                     contentDescription = "Ô sau",
+                                )
+                            }
+                        }
+                    }
+                    val prefetchLines = nav?.webPrefetchChapterQueueLines.orEmpty()
+                    if (prefetchLines.isNotEmpty()) {
+                        Column(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 96.dp)
+                                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                        ) {
+                            prefetchLines.take(5).forEach { line ->
+                                Text(
+                                    text = line,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 2,
+                                )
+                            }
+                            if (prefetchLines.size > 5) {
+                                Text(
+                                    text = "… +${prefetchLines.size - 5} mục",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }

@@ -39,6 +39,20 @@ data class LibraryCategoryRow(
     val hasImportFolder: Boolean,
     /** Đường dẫn file ảnh đại diện (JPEG đã resize) trong thư mục thể loại; null nếu chưa chọn. */
     val coverImagePath: String? = null,
+    /** Thể loại nguồn web (URL + selector). */
+    val isOnline: Boolean = false,
+    val onlineBaseUrl: String? = null,
+    /** Một hoặc nhiều CSS selector vùng nội dung (lưu JSON mảng trong DB). */
+    val onlineContentSelectors: List<String> = emptyList(),
+    val onlineNextPageSelector: String? = null,
+)
+
+/** Parser mặc định theo domain (bảng `online_domain_parsers`). */
+data class OnlineDomainParserRow(
+    val id: Long,
+    val domain: String,
+    val onlineNextPageSelector: String?,
+    val contentSelectors: List<String>,
 )
 
 data class LibraryStoryRow(
@@ -50,6 +64,15 @@ data class LibraryStoryRow(
     val sortOrder: Int,
     /** URI cây SAF (persist) nếu truyện được import từ thư mục — dùng để đồng bộ lại. */
     val importSourceUri: String? = null,
+    /** URL trang web gắn với truyện (nguồn online / WebView / cấu hình). */
+    val onlinePageUrl: String? = null,
+    /**
+     * Đã trích nội dung từ web thành công (selector + lưu file).
+     * false + [onlinePageUrl] khác rỗng → mở truyện sẽ thử parse lại.
+     */
+    val onlineContentParseOk: Boolean = true,
+    /** URL trang kế (href tuyệt đối) sau lần parse thành công; null nếu không lấy được. */
+    val onlineNextPageUrl: String? = null,
 )
 
 private class StoryLibraryOpenHelper(context: Context) :
@@ -64,7 +87,11 @@ private class StoryLibraryOpenHelper(context: Context) :
                 created_at INTEGER NOT NULL,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 import_folder_tree_uri TEXT,
-                cover_image_path TEXT
+                cover_image_path TEXT,
+                is_online INTEGER NOT NULL DEFAULT 0,
+                online_base_url TEXT,
+                online_content_selector TEXT,
+                online_next_page_selector TEXT
             )
             """.trimIndent(),
         )
@@ -78,6 +105,9 @@ private class StoryLibraryOpenHelper(context: Context) :
                 last_speech_sentence_index INTEGER NOT NULL DEFAULT -1,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 import_source_uri TEXT,
+                online_page_url TEXT,
+                online_content_parse_ok INTEGER NOT NULL DEFAULT 1,
+                online_next_page_url TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             )
@@ -91,6 +121,16 @@ private class StoryLibraryOpenHelper(context: Context) :
                 put("sort_order", 0)
             }
         db.insert("categories", null, seed)
+        db.execSQL(
+            """
+            CREATE TABLE online_domain_parsers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                online_next_page_selector TEXT,
+                online_content_selector TEXT
+            )
+            """.trimIndent(),
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -147,6 +187,35 @@ private class StoryLibraryOpenHelper(context: Context) :
         if (oldVersion < 6) {
             db.execSQL("ALTER TABLE categories ADD COLUMN cover_image_path TEXT")
         }
+        if (oldVersion < 7) {
+            db.execSQL(
+                "ALTER TABLE categories ADD COLUMN is_online INTEGER NOT NULL DEFAULT 0",
+            )
+            db.execSQL("ALTER TABLE categories ADD COLUMN online_base_url TEXT")
+            db.execSQL("ALTER TABLE categories ADD COLUMN online_content_selector TEXT")
+            db.execSQL("ALTER TABLE categories ADD COLUMN online_next_page_selector TEXT")
+        }
+        if (oldVersion < 8) {
+            db.execSQL("ALTER TABLE saved_stories ADD COLUMN online_page_url TEXT")
+        }
+        if (oldVersion < 9) {
+            db.execSQL(
+                "ALTER TABLE saved_stories ADD COLUMN online_content_parse_ok INTEGER NOT NULL DEFAULT 1",
+            )
+            db.execSQL("ALTER TABLE saved_stories ADD COLUMN online_next_page_url TEXT")
+        }
+        if (oldVersion < 10) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS online_domain_parsers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    domain TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    online_next_page_selector TEXT,
+                    online_content_selector TEXT
+                )
+                """.trimIndent(),
+            )
+        }
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -155,7 +224,7 @@ private class StoryLibraryOpenHelper(context: Context) :
 
     companion object {
         const val DB_NAME = "story_library.db"
-        const val DB_VERSION = 6
+        const val DB_VERSION = 10
         const val DEFAULT_CATEGORY_NAME = "Chưa phân loại"
     }
 }
@@ -187,7 +256,11 @@ class StoryLibraryRepository(private val context: Context) {
                            AND length(trim(c.import_folder_tree_uri)) > 0
                        THEN 1 ELSE 0
                    END AS has_import,
-                   c.cover_image_path
+                   c.cover_image_path,
+                   c.is_online,
+                   c.online_base_url,
+                   c.online_content_selector,
+                   c.online_next_page_selector
             FROM categories c
             ORDER BY c.sort_order ASC, c.name COLLATE NOCASE ASC
             """.trimIndent(),
@@ -202,6 +275,12 @@ class StoryLibraryRepository(private val context: Context) {
                         storyCount = c.getInt(2),
                         hasImportFolder = c.getInt(3) != 0,
                         coverImagePath = c.getString(4)?.trim()?.takeIf { it.isNotEmpty() },
+                        isOnline = c.getInt(5) != 0,
+                        onlineBaseUrl = c.getString(6)?.trim()?.takeIf { it.isNotEmpty() },
+                        onlineContentSelectors =
+                            decodeOnlineContentSelectors(c.getString(7)),
+                        onlineNextPageSelector =
+                            c.getString(8)?.trim()?.takeIf { it.isNotEmpty() },
                     ),
                 )
             }
@@ -230,6 +309,240 @@ class StoryLibraryRepository(private val context: Context) {
         val id = db.insert("categories", null, cv)
         if (id < 0) error("Không tạo được thể loại (tên trùng?)")
         return id
+    }
+
+    /**
+     * Tạo thể loại online: [name] lưu URL đã chuẩn hóa (unique), [online_base_url] cùng giá trị;
+     * đồng thời tạo một truyện gốc với [online_page_url] = URL (dùng WebView / cấu hình sau).
+     * Trả về (id, url) để mở WebView.
+     */
+    fun insertOnlineLibraryCategory(userInput: String): Pair<Long, String> {
+        val url = normalizeWebCategoryUrl(userInput.trim())
+        require(url.isNotEmpty())
+        val parsed = Uri.parse(url)
+        val scheme = parsed.scheme?.lowercase(Locale.ROOT)
+        require(scheme == "http" || scheme == "https") { "URL phải bắt đầu bằng http hoặc https" }
+        require(!parsed.host.isNullOrBlank()) { "URL không có tên máy chủ" }
+        val now = System.currentTimeMillis()
+        val db = helper.writableDatabase
+        val nextOrd =
+            db.rawQuery(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories",
+                null,
+            ).use { c ->
+                if (c.moveToFirst()) c.getInt(0) else 0
+            }
+        val cv =
+            ContentValues().apply {
+                put("name", url)
+                put("created_at", now)
+                put("sort_order", nextOrd)
+                put("is_online", 1)
+                put("online_base_url", url)
+            }
+        val id = db.insert("categories", null, cv)
+        if (id < 0) error("Không tạo được thể loại online (URL trùng?)")
+        val seedTitle =
+            parsed.host?.trim()?.takeIf { it.isNotEmpty() } ?: "Trang web"
+        val seedBody =
+            buildString {
+                appendLine("Thể loại online — URL trang được lưu trong metadata truyện (online_page_url).")
+                appendLine()
+                appendLine(url)
+            }
+        try {
+            insertStory(
+                categoryId = id,
+                title = seedTitle,
+                body = seedBody,
+                onlinePageUrl = url,
+            )
+        } catch (e: Exception) {
+            helper.writableDatabase.delete("categories", "id = ?", arrayOf(id.toString()))
+            runCatching { categoryDir(id).deleteRecursively() }
+            throw e
+        }
+        runCatching {
+            findOnlineDomainParserForPageUrl(url)?.let { parser ->
+                setOnlineNextPageSelectorForCategory(id, parser.onlineNextPageSelector)
+                replaceOnlineContentSelectors(id, parser.contentSelectors)
+                resetOnlineContentParseStateForStoriesInCategory(id)
+            }
+        }
+        return id to url
+    }
+
+    fun updateOnlineNextPageSelector(categoryId: Long, nextPageSelector: String) {
+        setOnlineNextPageSelectorForCategory(categoryId, nextPageSelector.trim())
+    }
+
+    fun getOnlineNextPageSelectorForCategory(categoryId: Long): String? {
+        helper.readableDatabase
+            .rawQuery(
+                "SELECT online_next_page_selector FROM categories WHERE id = ?",
+                arrayOf(categoryId.toString()),
+            )
+            .use { c ->
+                if (!c.moveToFirst()) return null
+                return c.getString(0)?.trim()?.takeIf { it.isNotEmpty() }
+            }
+    }
+
+    /** null = xóa selector trang sau. */
+    fun setOnlineNextPageSelectorForCategory(categoryId: Long, selector: String?) {
+        val cv = ContentValues()
+        val t = selector?.trim().orEmpty()
+        if (t.isEmpty()) {
+            cv.putNull("online_next_page_selector")
+        } else {
+            cv.put("online_next_page_selector", t)
+        }
+        val n =
+            helper.writableDatabase.update(
+                "categories",
+                cv,
+                "id = ?",
+                arrayOf(categoryId.toString()),
+            )
+        if (n != 1) error("Không cập nhật được selector trang sau")
+    }
+
+    fun getOnlineContentSelectorsForCategory(categoryId: Long): List<String> {
+        val raw = readOnlineContentSelectorColumnRaw(categoryId)
+        return decodeOnlineContentSelectors(raw)
+    }
+
+    /** Thêm một selector nội dung (giữ các selector cũ). */
+    fun appendOnlineContentSelector(categoryId: Long, selector: String) {
+        val trimmed = selector.trim()
+        require(trimmed.isNotEmpty())
+        val list = getOnlineContentSelectorsForCategory(categoryId).toMutableList()
+        list.add(trimmed)
+        writeOnlineContentSelectorsColumn(categoryId, list)
+    }
+
+    /** Ghi đè toàn bộ danh sách selector nội dung. */
+    fun replaceOnlineContentSelectors(categoryId: Long, selectors: List<String>) {
+        writeOnlineContentSelectorsColumn(
+            categoryId,
+            selectors.map { it.trim() }.filter { it.isNotEmpty() },
+        )
+    }
+
+    fun listOnlineDomainParsers(): List<OnlineDomainParserRow> {
+        helper.readableDatabase
+            .rawQuery(
+                """
+                SELECT id, domain, online_next_page_selector, online_content_selector
+                FROM online_domain_parsers
+                ORDER BY domain COLLATE NOCASE ASC
+                """.trimIndent(),
+                null,
+            )
+            .use { c ->
+                return buildList {
+                    while (c.moveToNext()) {
+                        add(
+                            OnlineDomainParserRow(
+                                id = c.getLong(0),
+                                domain = c.getString(1)?.trim().orEmpty(),
+                                onlineNextPageSelector =
+                                    c.getString(2)?.trim()?.takeIf { it.isNotEmpty() },
+                                contentSelectors = decodeOnlineContentSelectors(c.getString(3)),
+                            ),
+                        )
+                    }
+                }
+            }
+    }
+
+    /**
+     * Ghi parser cho [domainKey] (đã chuẩn hóa, ví dụ `example.com`). Cùng domain thì cập nhật.
+     */
+    fun upsertOnlineDomainParser(
+        domainKey: String,
+        nextPageSelector: String?,
+        contentSelectors: List<String>,
+    ) {
+        val domain =
+            domainKey
+                .trim()
+                .lowercase(Locale.ROOT)
+                .removePrefix("www.")
+                .trim()
+        require(domain.isNotEmpty())
+        val enc = encodeOnlineContentSelectors(contentSelectors)
+        val db = helper.writableDatabase
+        val cv =
+            ContentValues().apply {
+                put("domain", domain)
+                val np = nextPageSelector?.trim().orEmpty()
+                if (np.isEmpty()) {
+                    putNull("online_next_page_selector")
+                } else {
+                    put("online_next_page_selector", np)
+                }
+                put("online_content_selector", enc)
+            }
+        val n = db.update("online_domain_parsers", cv, "domain = ?", arrayOf(domain))
+        if (n == 0) {
+            val ins = db.insert("online_domain_parsers", null, cv)
+            if (ins < 0) error("Không thêm được parser domain")
+        }
+    }
+
+    fun deleteOnlineDomainParser(id: Long) {
+        helper.writableDatabase.delete("online_domain_parsers", "id = ?", arrayOf(id.toString()))
+    }
+
+    /** Khớp theo domain của [pageUrl] với bảng parser mặc định. */
+    fun findOnlineDomainParserForPageUrl(pageUrl: String): OnlineDomainParserRow? {
+        val key = normalizedOnlineParserDomainKey(pageUrl) ?: return null
+        helper.readableDatabase
+            .rawQuery(
+                """
+                SELECT id, domain, online_next_page_selector, online_content_selector
+                FROM online_domain_parsers
+                WHERE domain = ?
+                LIMIT 1
+                """.trimIndent(),
+                arrayOf(key),
+            )
+            .use { c ->
+                if (!c.moveToFirst()) return null
+                return OnlineDomainParserRow(
+                    id = c.getLong(0),
+                    domain = c.getString(1)?.trim().orEmpty(),
+                    onlineNextPageSelector =
+                        c.getString(2)?.trim()?.takeIf { it.isNotEmpty() },
+                    contentSelectors = decodeOnlineContentSelectors(c.getString(3)),
+                )
+            }
+    }
+
+    private fun readOnlineContentSelectorColumnRaw(categoryId: Long): String? {
+        helper.readableDatabase
+            .rawQuery(
+                "SELECT online_content_selector FROM categories WHERE id = ?",
+                arrayOf(categoryId.toString()),
+            )
+            .use { c ->
+                if (!c.moveToFirst()) return null
+                return c.getString(0)?.trim()?.takeIf { it.isNotEmpty() }
+            }
+    }
+
+    private fun writeOnlineContentSelectorsColumn(categoryId: Long, selectors: List<String>) {
+        val encoded = encodeOnlineContentSelectors(selectors)
+        val cv = ContentValues().apply { put("online_content_selector", encoded) }
+        val n =
+            helper.writableDatabase.update(
+                "categories",
+                cv,
+                "id = ?",
+                arrayOf(categoryId.toString()),
+            )
+        if (n != 1) error("Không cập nhật được selector nội dung cho thể loại")
     }
 
     /** Ghi lại thứ tự hiển thị thể loại (0 = trên cùng). */
@@ -502,7 +815,7 @@ class StoryLibraryRepository(private val context: Context) {
         val db = helper.readableDatabase
         db.rawQuery(
             """
-            SELECT id, category_id, title, file_path, last_speech_sentence_index, sort_order, import_source_uri
+            SELECT id, category_id, title, file_path, last_speech_sentence_index, sort_order, import_source_uri, online_page_url, online_content_parse_ok, online_next_page_url
             FROM saved_stories
             WHERE category_id = ?
             ORDER BY sort_order ASC, id ASC
@@ -520,6 +833,10 @@ class StoryLibraryRepository(private val context: Context) {
                         lastSpeechSentenceIndex = c.getInt(4),
                         sortOrder = c.getInt(5),
                         importSourceUri = c.getString(6),
+                        onlinePageUrl = c.getString(7)?.trim()?.takeIf { it.isNotEmpty() },
+                        onlineContentParseOk = c.getInt(8) != 0,
+                        onlineNextPageUrl =
+                            c.getString(9)?.trim()?.takeIf { it.isNotEmpty() },
                     ),
                 )
             }
@@ -568,11 +885,43 @@ class StoryLibraryRepository(private val context: Context) {
         return list.getOrNull(idx + 1)
     }
 
+    /**
+     * Truyện trong thể loại có [LibraryStoryRow.onlinePageUrl] khớp [pageUrl]
+     * (sau [normalizeOnlineStoryPageUrlForMatch]).
+     */
+    fun findStoryInCategoryByOnlinePageUrl(
+        categoryId: Long,
+        pageUrl: String,
+    ): LibraryStoryRow? {
+        val want = normalizeOnlineStoryPageUrlForMatch(pageUrl)
+        if (want.isEmpty()) return null
+        for (r in listStories(categoryId)) {
+            val u = r.onlinePageUrl?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+            if (normalizeOnlineStoryPageUrlForMatch(u) == want) return r
+        }
+        return null
+    }
+
+    /** Tiêu đề truyện chưa trùng các truyện hiện có trong thể loại. */
+    fun suggestUniqueStoryTitle(
+        categoryId: Long,
+        base: String,
+    ): String {
+        val used = listStories(categoryId).map { it.title }.toMutableSet()
+        var t = base.trim().ifEmpty { "Trang web" }.take(120)
+        var i = 2
+        while (t in used) {
+            t = "${base.trim().take(100)} ($i)"
+            i++
+        }
+        return t
+    }
+
     fun getStory(storyId: Long): LibraryStoryRow? {
         val db = helper.readableDatabase
         db.rawQuery(
             """
-            SELECT id, category_id, title, file_path, last_speech_sentence_index, sort_order, import_source_uri
+            SELECT id, category_id, title, file_path, last_speech_sentence_index, sort_order, import_source_uri, online_page_url, online_content_parse_ok, online_next_page_url
             FROM saved_stories WHERE id = ?
             """.trimIndent(),
             arrayOf(storyId.toString()),
@@ -586,8 +935,125 @@ class StoryLibraryRepository(private val context: Context) {
                 lastSpeechSentenceIndex = c.getInt(4),
                 sortOrder = c.getInt(5),
                 importSourceUri = c.getString(6),
+                onlinePageUrl = c.getString(7)?.trim()?.takeIf { it.isNotEmpty() },
+                onlineContentParseOk = c.getInt(8) != 0,
+                onlineNextPageUrl =
+                    c.getString(9)?.trim()?.takeIf { it.isNotEmpty() },
             )
         }
+    }
+
+    /** Có [online_page_url] nhưng chưa parse nội dung web thành công → cần tải lại khi mở. */
+    fun storyNeedsOnlineContentRefresh(row: LibraryStoryRow): Boolean =
+        !row.onlineContentParseOk &&
+            !row.onlinePageUrl.isNullOrBlank()
+
+    /**
+     * Sau khi trích nội dung từ WebView thành công (trang đã tải không lỗi): đánh dấu parse xong
+     * và lưu URL trang kế nếu lấy được `href`; không lấy được `href` thì vẫn coi parse xong,
+     * `online_next_page_url` để null.
+     */
+    fun markOnlineStoryContentParseSuccess(
+        storyId: Long,
+        nextPageAbsoluteUrl: String?,
+    ) {
+        val cv =
+            ContentValues().apply {
+                put("online_content_parse_ok", 1)
+                if (nextPageAbsoluteUrl.isNullOrBlank()) {
+                    putNull("online_next_page_url")
+                } else {
+                    put("online_next_page_url", nextPageAbsoluteUrl.trim())
+                }
+                put("updated_at", System.currentTimeMillis())
+            }
+        val n =
+            helper.writableDatabase.update(
+                "saved_stories",
+                cv,
+                "id = ?",
+                arrayOf(storyId.toString()),
+            )
+        if (n != 1) error("Không cập nhật được trạng thái parse online")
+    }
+
+    /**
+     * Đảm bảo đã có bản ghi chương/trang kế: **`online_page_url` của chương kế = `online_next_page_url`
+     * của chương hiện tại** (đọc từ DB sau [markOnlineStoryContentParseSuccess], hoặc [nextPageOverride]
+     * nếu truyền — dùng khi chưa kịp đọc lại bản ghi cha).
+     *
+     * Chưa có thì [insertStory] với body rỗng, `online_content_parse_ok = 0` (pending/reload/queue).
+     *
+     * @return id truyện đã tồn tại hoặc vừa tạo; null nếu không có URL kế hoặc trùng vòng với chính [currentStoryId].
+     */
+    fun ensureOnlineNextChapterStoryRow(
+        currentStoryId: Long,
+        nextPageOverride: String? = null,
+    ): Long? {
+        val parent = getStory(currentStoryId) ?: return null
+        val categoryId = parent.categoryId
+        val resolvedNext =
+            nextPageOverride?.trim()?.takeIf { it.isNotEmpty() }
+                ?: parent.onlineNextPageUrl?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+        val norm = normalizeWebCategoryUrl(resolvedNext)
+        if (norm.isEmpty()) return null
+        val self = parent.onlinePageUrl?.trim()?.takeIf { it.isNotEmpty() }
+        if (self != null &&
+            normalizeOnlineStoryPageUrlForMatch(self) == normalizeOnlineStoryPageUrlForMatch(norm)
+        ) {
+            return null
+        }
+        val existing = findStoryInCategoryByOnlinePageUrl(categoryId, norm)
+        if (existing != null) {
+            if (existing.id == currentStoryId) return null
+            return existing.id
+        }
+        val baseTitle = baseStoryTitleFromOnlinePageUrl(norm)
+        val title = suggestUniqueStoryTitle(categoryId, baseTitle)
+        return insertStory(
+            categoryId = categoryId,
+            title = title,
+            body = "",
+            onlinePageUrl = norm,
+        )
+    }
+
+    /**
+     * Nếu truyện [storyId] đã có [LibraryStoryRow.onlineNextPageUrl] trong DB, đảm bảo tồn tại
+     * một truyện khác trong cùng thể loại với `online_page_url` = URL đó (chèn mới nếu thiếu),
+     * luôn ở trạng thái **chưa parse** (`online_content_parse_ok = 0`) để reload / hàng đợi tải nội dung.
+     *
+     * @return `true` nếu vừa [insertStory] thêm bản ghi mới.
+     */
+    fun ensurePlaceholderStoryForStoredOnlineNextPageUrl(storyId: Long): Boolean {
+        val row = getStory(storyId) ?: return false
+        val next =
+            row.onlineNextPageUrl?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return false
+        val self = row.onlinePageUrl?.trim()?.takeIf { it.isNotEmpty() }
+        if (self != null &&
+            normalizeOnlineStoryPageUrlForMatch(self) == normalizeOnlineStoryPageUrlForMatch(next)
+        ) {
+            return false
+        }
+        val norm = normalizeWebCategoryUrl(next)
+        val before = findStoryInCategoryByOnlinePageUrl(row.categoryId, norm)
+        ensureOnlineNextChapterStoryRow(storyId)
+        val after = findStoryInCategoryByOnlinePageUrl(row.categoryId, norm)
+        return before == null && after != null
+    }
+
+    private fun baseStoryTitleFromOnlinePageUrl(url: String): String {
+        val uri = Uri.parse(url)
+        val host = uri.host?.trim()?.takeIf { it.isNotEmpty() } ?: "web"
+        val segments =
+            uri.path?.trim('/')?.split('/')?.filter { it.isNotEmpty() }.orEmpty()
+        val seg =
+            segments.lastOrNull()?.take(60)
+                ?: uri.lastPathSegment?.take(60)
+                ?: "trang"
+        return "$host — $seg".take(120)
     }
 
     fun readStoryText(storyId: Long): String? {
@@ -1180,6 +1646,7 @@ class StoryLibraryRepository(private val context: Context) {
         title: String,
         body: String,
         importSourceUri: String? = null,
+        onlinePageUrl: String? = null,
     ): Long {
         val trimmedTitle = title.trim().ifEmpty { "Không tiêu đề" }
         val now = System.currentTimeMillis()
@@ -1194,6 +1661,12 @@ class StoryLibraryRepository(private val context: Context) {
                 put("last_speech_sentence_index", -1)
                 put("sort_order", sortOrder)
                 put("import_source_uri", importSourceUri)
+                if (onlinePageUrl != null) {
+                    put("online_page_url", onlinePageUrl.trim())
+                    put("online_content_parse_ok", 0)
+                } else {
+                    put("online_content_parse_ok", 1)
+                }
                 put("created_at", now)
                 put("updated_at", now)
             }
@@ -1521,6 +1994,26 @@ class StoryLibraryRepository(private val context: Context) {
         val row = getStory(storyId) ?: return false
         writeStoryTextBodyToDiskAndDb(storyId, row, body)
         return true
+    }
+
+    /**
+     * Đổi selector / URL online: coi nội dung đã lưu là cũ — truyện có [online_page_url] trong thể loại
+     * được đánh dấu chưa parse để lần mở sau (hoặc sync) tải lại từ web.
+     */
+    fun resetOnlineContentParseStateForStoriesInCategory(categoryId: Long) {
+        val now = System.currentTimeMillis()
+        val cv =
+            ContentValues().apply {
+                put("online_content_parse_ok", 0)
+                putNull("online_next_page_url")
+                put("updated_at", now)
+            }
+        helper.writableDatabase.update(
+            "saved_stories",
+            cv,
+            "category_id = ? AND online_page_url IS NOT NULL AND length(trim(online_page_url)) > 0",
+            arrayOf(categoryId.toString()),
+        )
     }
 
     /** Chỉ đổi tiêu đề hiển thị trong thư viện (không đổi file nội dung). */

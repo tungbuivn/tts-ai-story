@@ -145,6 +145,9 @@ import com.ttsaistory.app.model.clearLastReadingBookmark
 import com.ttsaistory.app.model.lastReadingBookmarkAppliesToStory
 import com.ttsaistory.app.model.putLastReadingBookmark
 import com.ttsaistory.app.model.saveLastText
+import com.ttsaistory.app.ui.library.OnlineCategoryHeadlessStoryTextSync
+import com.ttsaistory.app.ui.library.OnlineWebStoryNextPagePrefetch
+import com.ttsaistory.app.ui.library.OnlineWebStoryViewAheadPreload
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -228,8 +231,31 @@ fun ReaderTab(
     val nativeTextProgrammatic = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     var fullTextNativeFocused by remember { mutableStateOf(false) }
     var exportUiFromCoordinator by remember { mutableStateOf<DialogTtsExportState?>(null) }
+    var activeStoryHasWebUrl by remember { mutableStateOf(false) }
+    var webContentReloadWorking by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         TtsExportUiCoordinator.uiState.collect { exportUiFromCoordinator = it }
+    }
+    LaunchedEffect(activeLibraryStoryId, librarySyncEpoch) {
+        activeStoryHasWebUrl =
+            activeLibraryStoryId?.let { sid ->
+                withContext(Dispatchers.IO) {
+                    libraryRepository.getStory(sid)?.onlinePageUrl?.trim()?.isNotEmpty() == true
+                }
+            } == true
+    }
+
+    LaunchedEffect(activeLibraryStoryId, librarySyncEpoch) {
+        val sid = activeLibraryStoryId ?: return@LaunchedEffect
+        val insertedNextPlaceholder =
+            withContext(Dispatchers.IO) {
+                val row = libraryRepository.getStory(sid) ?: return@withContext false
+                if (row.onlinePageUrl.isNullOrBlank()) return@withContext false
+                libraryRepository.ensurePlaceholderStoryForStoredOnlineNextPageUrl(sid)
+            }
+        if (insertedNextPlaceholder) {
+            onLibraryDataChanged()
+        }
     }
     val pendingPostNotifExport = remember { mutableStateOf<(() -> Unit)?>(null) }
     val postNotifLauncher =
@@ -305,6 +331,12 @@ fun ReaderTab(
     var moveStoryTitleDraft by remember { mutableStateOf("") }
     var textEditorChromeViewOnly by rememberSaveable { mutableStateOf(true) }
     var wasTextEditorChromeViewOnly by remember { mutableStateOf(textEditorChromeViewOnly) }
+    var webPrefetchChapterQueueLines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var webStoryQueueTargetStoryId by remember { mutableStateOf<Long?>(null) }
+
+    LaunchedEffect(activeLibraryStoryId) {
+        webStoryQueueTargetStoryId = null
+    }
 
     LaunchedEffect(moveCategoryTarget?.id) {
         moveStoryTitleDraft = moveCategoryTarget?.title.orEmpty()
@@ -313,7 +345,50 @@ fun ReaderTab(
     LaunchedEffect(textEditorChromeViewOnly) {
         if (textEditorChromeViewOnly) {
             keyboardController?.hide()
+            webPrefetchChapterQueueLines = emptyList()
         }
+    }
+
+    LaunchedEffect(textEditorChromeViewOnly, activeLibraryStoryId) {
+        if (textEditorChromeViewOnly) return@LaunchedEffect
+        val sid = activeLibraryStoryId ?: return@LaunchedEffect
+        val isWeb =
+            withContext(Dispatchers.IO) {
+                libraryRepository.getStory(sid)?.onlinePageUrl?.trim()?.isNotEmpty() == true
+            }
+        if (!isWeb) {
+            webPrefetchChapterQueueLines = emptyList()
+            return@LaunchedEffect
+        }
+        try {
+            OnlineWebStoryNextPagePrefetch.prefetchForwardChainWhileEditing(
+                context = ctx,
+                startStoryId = sid,
+                repository = libraryRepository,
+                onLibraryDataChanged = onLibraryDataChanged,
+                onPrefetchQueueLines = { webPrefetchChapterQueueLines = it },
+                onQueueTargetStoryId = { webStoryQueueTargetStoryId = it },
+            )
+        } finally {
+            webPrefetchChapterQueueLines = emptyList()
+        }
+    }
+
+    LaunchedEffect(textEditorChromeViewOnly, activeLibraryStoryId, librarySyncEpoch) {
+        if (!textEditorChromeViewOnly) return@LaunchedEffect
+        val sid = activeLibraryStoryId ?: return@LaunchedEffect
+        val isWeb =
+            withContext(Dispatchers.IO) {
+                libraryRepository.getStory(sid)?.onlinePageUrl?.trim()?.isNotEmpty() == true
+            }
+        if (!isWeb) return@LaunchedEffect
+        OnlineWebStoryViewAheadPreload.preloadNextTenWhileViewing(
+            context = ctx,
+            anchorLibraryStoryId = sid,
+            repository = libraryRepository,
+            onLibraryDataChanged = onLibraryDataChanged,
+            onQueueTargetStoryId = { webStoryQueueTargetStoryId = it },
+        )
     }
 
     fun openLibraryStoryPickerFromToolbar() {
@@ -813,6 +888,14 @@ fun ReaderTab(
                 goBottomOrCaretEnd = { goBottomOrCaretEndAction() },
                 ttsSpeakableSentenceTotal = toolbarTtsSpeakableCount,
                 ttsSentenceSplitWorking = toolbarTtsSplitWorking,
+                webPrefetchChapterQueueLines = webPrefetchChapterQueueLines,
+                libraryWebStoryActive = activeStoryHasWebUrl,
+                webStoryQueueTargetStoryId =
+                    if (activeStoryHasWebUrl) {
+                        webStoryQueueTargetStoryId
+                    } else {
+                        null
+                    },
             ),
         )
     }
@@ -1191,6 +1274,56 @@ fun ReaderTab(
                         hasExportableText(
                             if (paragraphSplitMode) mergedParagraphFields() else text,
                         ),
+                showReloadWebContent = activeStoryHasWebUrl,
+                onReloadWebContentClick = {
+                    keyboardController?.hide()
+                    val sid = activeLibraryStoryId ?: return@ReaderToolbarActionsColumn
+                    if (paragraphSplitMode) flushParagraphParentPersist()
+                    scope.launch {
+                        webContentReloadWorking = true
+                        try {
+                            OnlineCategoryHeadlessStoryTextSync.syncOnlineStoryFromWebPage(
+                                context = ctx,
+                                storyId = sid,
+                                repository = libraryRepository,
+                                bypassHttpCache = true,
+                            )
+                            val body =
+                                withContext(Dispatchers.IO) {
+                                    libraryRepository.readStoryText(sid)
+                                }
+                            if (body == null) {
+                                Toast.makeText(
+                                    ctx,
+                                    "Không đọc được nội dung sau khi tải.",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                return@launch
+                            }
+                            val cleaned = canonicalTextFromRaw(body)
+                            onTextChange(cleaned)
+                            onLibraryFileSynced()
+                            onLibraryDataChanged()
+                            Toast.makeText(
+                                ctx,
+                                "Đã tải lại nội dung từ web.",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Toast.makeText(
+                                ctx,
+                                e.message ?: "Không tải lại được từ web",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        } finally {
+                            webContentReloadWorking = false
+                        }
+                    }
+                },
+                reloadWebContentEnabled =
+                    exportUiFromCoordinator == null && !webContentReloadWorking,
                 onMoveStoryCategoryClick = {
                     keyboardController?.hide()
                     val sid = activeLibraryStoryId

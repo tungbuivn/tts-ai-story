@@ -84,4 +84,15 @@ data class ReaderBottomNavBridge(
     val ttsSpeakableSentenceTotal: Int? = null,
     /** Đang chạy [splitIntoParagraphs] trên luồng nền — bottom bar có thể hiện dialog tiến trình. */
     val ttsSentenceSplitWorking: Boolean = false,
+    /**
+     * Khi chỉnh sửa truyện web: các dòng mô tả chương/URL đang trong hàng đợi tải nền (prefetch trang sau).
+     */
+    val webPrefetchChapterQueueLines: List<String> = emptyList(),
+    /** Truyện thư viện đang mở là nguồn web (`online_page_url`). */
+    val libraryWebStoryActive: Boolean = false,
+    /**
+     * Id truyện sắp được / đang được headless parse trong hàng đợi nền (chỉ xem hoặc prefetch sửa);
+     * null khi không còn mục trong queue.
+     */
+    val webStoryQueueTargetStoryId: Long? = null,
 )

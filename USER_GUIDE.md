@@ -32,6 +32,7 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 | **Text** / **Thư viện** | Chuyển nhanh sang tab tương ứng. |
 | **Cấu hình ElevenLabs** | Nhập **API key**, chọn giọng/tùy chọn ElevenLabs. Cần **mạng**. |
 | **Cấu hình TTS hệ thống** | Chọn **giọng đọc**, **tốc độ**, **cao độ** của TTS có sẵn trên máy. |
+| **Cấu hình Parser online** | Quản lý **parser theo domain** cho truyện web: thêm / sửa (chạm tên domain) / xóa; mỗi parser có **URL** (nhiều dòng, mỗi dòng một URL — app lấy **domain**), ô **Trang tiếp** và **Nội dung** (CSS selector, giống cấu hình web trước đây). Khi bạn **tạo thể loại bằng URL** trong Thư viện, app **tự gán** selector nếu domain đã có ở đây — **không** mở trình duyệt trong app để cấu hình. |
 | **Fonts** | Đổi **font chữ** vùng soạn trên tab Text (có thể chọn font từ máy nếu app hỗ trợ). |
 | **Giới thiệu** | Xem tên app, **phiên bản**, mô tả ngắn; nút **Đóng** để thoát hộp thoại. |
 
@@ -41,7 +42,7 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 
 ### 1. Có nội dung để đọc
 
-- Gõ hoặc **dán** văn bản vào vùng lớn ở giữa.
+- Gõ hoặc **dán** văn bản vào vùng lớn ở giữa. App có thể **chuẩn hóa** một số ký tự định dạng: với `*`, `_`, `+`, `-`, các dấu **giống nhau liền nhau** được gộp còn **một**, **khoảng trắng** sát các dấu đó có thể bị bỏ; nếu **cả một dòng** (sau khi bỏ trắng thừa) chỉ còn **một** ký tự trong nhóm trên thì dòng đó có thể bị coi là rỗng.
 - Hoặc mở truyện từ **Thư viện** (chạm tên truyện) — nội dung sẽ hiện ở đây.
 - Hoặc dùng **Mở file…** trong menu ☰ (xem bảng trên: txt, zip, epub).
 
@@ -104,7 +105,8 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 
 ### Thêm thể loại mới
 
-- Trên **thanh trên** khi đang ở tab Thư viện: chạm nút **thêm thể loại** (thường là dấu **+**) — nhập tên → xác nhận.
+- Trên **thanh trên** khi đang ở tab Thư viện: chạm nút **thêm thể loại** (thường là dấu **+**).
+- Nhập **tên thể loại** bình thường, hoặc nhập **URL** trang truyện (bắt đầu bằng `http://` / `https://`, có tên máy chủ). Khi app nhận là URL, bạn tạo được **thể loại online** kèm một truyện gốc; **selector** (trang tiếp, nội dung) lấy theo **domain** nếu bạn đã cấu hình trong menu ☰ → **Cấu hình Parser online**. Sau khi tạo, app **không** mở màn hình Web để chỉnh tay trong app.
 
 ### Nhập cả thư mục từ máy
 
@@ -146,6 +148,7 @@ Nếu sau khi mở bạn **quay lại** app mà nội dung không bị nhập tr
 | Mở zip / epub báo lỗi | File có thể **hỏng**, **không phải zip/epub**, **epub có mã hóa** (DRM) — app không hỗ trợ; thử file khác. Zip cần chứa **file văn** app đọc được sau khi giải nén. |
 | Đồng bộ thư mục báo lỗi / không chạy | Thư mục gốc có thể đã **đổi tên / di chuyển** hoặc Android **thu hồi quyền** — thử **Nhập thư mục** lại cho thể loại mới. |
 | Đọc tắt màn hình vẫn dừng | Một số máy siết **tiết kiệm pin** mạnh; thử tắt tối ưu pin cho app hoặc **không tắt nguồn màn hình** khi nghe lâu. |
+| Truyện web / thể loại online không tải nội dung | Vào menu ☰ → **Cấu hình Parser online**: thêm hoặc sửa parser đúng **domain** (ví dụ `truyen.site`), đủ ô **Trang tiếp** và **Nội dung**; tạo lại thể loại bằng URL hoặc chờ app parse lại khi mở truyện (tùy trạng thái). |
 
 ---
 

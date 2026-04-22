@@ -1,5 +1,6 @@
 package com.ttsaistory.app.ui.library
 
+import com.ttsaistory.app.data.looksLikeWebCategoryUrl
 import com.ttsaistory.app.ui.core.AppAlertDialog
 import com.ttsaistory.app.ui.core.DialogSemanticTone
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,9 +15,13 @@ internal fun DialogLibraryNewCategory(
     categoryNameDraft: String,
     onCategoryNameDraftChange: (String) -> Unit,
     onDismissRequest: () -> Unit,
-    /** [trimmedName] đã được trim và không rỗng (nút Tạo chỉ gọi khi hợp lệ). */
-    onConfirmCreate: (trimmedName: String) -> Unit,
+    /**
+     * [trimmedName] đã trim, không rỗng.
+     * [treatAsOnlineWebCategory] true khi nhận diện URL — tạo thể loại online; selector theo domain từ DB (menu Parser online).
+     */
+    onConfirmCreate: (trimmedName: String, treatAsOnlineWebCategory: Boolean) -> Unit,
 ) {
+    val asUrl = looksLikeWebCategoryUrl(categoryNameDraft)
     AppAlertDialog(
         tone = DialogSemanticTone.Info,
         onDismissRequest = onDismissRequest,
@@ -25,7 +30,14 @@ internal fun DialogLibraryNewCategory(
             OutlinedTextField(
                 value = categoryNameDraft,
                 onValueChange = onCategoryNameDraftChange,
-                label = { Text("Tên") },
+                label = { Text(if (asUrl) "URL hoặc tên" else "Tên") },
+                supportingText = {
+                    if (asUrl) {
+                        Text(
+                            "Nhận diện URL — tạo thể loại online. Cấu hình selector theo domain trong menu ☰ → Cấu hình Parser online.",
+                        )
+                    }
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -34,7 +46,7 @@ internal fun DialogLibraryNewCategory(
             Button(
                 onClick = {
                     val n = categoryNameDraft.trim()
-                    if (n.isNotEmpty()) onConfirmCreate(n)
+                    if (n.isNotEmpty()) onConfirmCreate(n, looksLikeWebCategoryUrl(n))
                 },
             ) {
                 Text("Tạo")

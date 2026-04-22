@@ -29,6 +29,7 @@ Mở bằng nút **☰** trên thanh trên.
 | **Text** / **Thư viện** | Chuyển nhanh giữa hai tab. |
 | **Cấu hình ElevenLabs** | API key và tùy chọn dùng giọng ElevenLabs (cần Internet). |
 | **Cấu hình TTS hệ thống** | Giọng, tốc độ, cao độ Android TTS. |
+| **Cấu hình Parser online** | Quản lý **parser theo domain** (URL nhiều dòng → domain; «Trang tiếp» / «Nội dung» giống cấu hình selector web). Khi tạo **thể loại online bằng URL**, app khớp **domain** của URL với bảng này để gán selector cho thể loại — **không** mở WebView cấu hình. |
 | **Fonts** | Cấu hình font vùng soạn (tab Text). |
 | **Giới thiệu** | Hộp thoại: tên app, phiên bản (`BuildConfig`), mô tả ngắn. |
 
@@ -56,6 +57,7 @@ Mở bằng nút **☰** trên thanh trên.
 - **Kéo thứ tự thể loại:** giữ **⋮⋮** (drag handle) rồi kéo dọc; thả tay sau khi xong — thứ tự được lưu.
 - **Menu ⋮** trên từng thể loại:
   - **Đổi tên thể loại**
+  - **Chọn ảnh đại diện** (Select image) — gắn ảnh bìa cho thể loại.
   - **Xuất ra…** — xuất nội dung thể loại ra **Downloads** (đường dẫn kiểu `Download/tts-ai-story/…`): **một .txt ghép**, **thư mục + file .txt đánh số**, **một .zip**, hoặc **một .epub** (mục lục từ dòng đầu mỗi truyện).
   - **Đồng bộ thư mục** — với thể loại đã **import thư mục** trước đó (app đã lưu URI cây SAF): **xóa toàn bộ truyện trong thể loại** rồi **import lại** từ cùng thư mục; có **popup tiến trình** giống lúc import. Cần quyền đọc thư mục vẫn còn hiệu lực.
   - **Xóa thể loại**
@@ -71,8 +73,12 @@ Mở bằng nút **☰** trên thanh trên.
 
 ### Thêm thể loại & import
 
-- **Thêm thể loại:** từ **top bar** (tab Thư viện) hoặc từ drawer (nếu vẫn có mục tương ứng) — mở hộp thoại nhập tên thể loại mới.
+- **Thêm thể loại:** từ **top bar** (tab Thư viện) — mở hộp thoại nhập **tên** hoặc **URL** (http/https). Nếu nhập URL hợp lệ, app tạo **thể loại online** + một truyện gốc có `online_page_url`; selector **Trang tiếp** / **Nội dung** được lấy từ **Cấu hình Parser online** (drawer) nếu đã có domain khớp — **không** mở WebView sau khi tạo.
 - **Import thư mục:** top bar (tab Thư viện) — chọn **cây thư mục** qua SAF; app xin **quyền đọc lâu dài** cho URI cây. Mỗi **file** (đệ quy) trong thư mục có nội dung hợp lệ → **một truyện**; tên thể loại thường theo tên thư mục. Có **popup tiến trình** (số file, đường dẫn đang xử lý).
+
+### Chuẩn hóa văn bản khi dán / lưu (tab Text)
+
+- Trong `ParagraphTextService.sanitizeParagraphText`: với ký tự `*`, `_`, `+`, `-`, app **gộp** các dấu giống liền nhau thành **một**, **xoá khoảng trắng** kề các dấu đó (lặp cho đến khi ổn định); nếu cả dòng (sau trim) chỉ còn **đúng một** trong các dấu trên thì dòng đó thành **rỗng** (bị bỏ khi tách đoạn).
 
 ---
 
@@ -116,6 +122,8 @@ Cài file APK debug sinh ra dưới `app/build/outputs/apk/debug/`.
 ## Ghi chú cho dev
 
 - UI chính: `AppTabs.kt` → `AppModalNavigationDrawerScaffold.kt` (drawer + scaffold + tab), `ReaderTab.kt`, `LibraryTab.kt`.
+- Parser online theo domain: bảng `online_domain_parsers` (migration DB), `StoryLibraryRepository` (`listOnlineDomainParsers`, `upsertOnlineDomainParser`, …), `DialogOnlineDomainParsersManage.kt` (drawer), `LibraryOnlineCategoryUrl.kt` (`normalizedOnlineParserDomainKey`, …). WebView `LibraryOnlineCategoryWebViewScreen` đã gỡ.
+- Chuẩn hóa đoạn/câu: `ParagraphTextService.kt`.
 - Thư viện / DB: `StoryLibraryRepository.kt`.
 - Intent chia sẻ / VIEW: xử lý trong `MainActivity` / `AppTabs.kt` (consumer, coroutine, v.v.).
 

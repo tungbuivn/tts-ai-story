@@ -70,7 +70,6 @@ fun LibraryTab(
 
     var showAddCategory by remember { mutableStateOf(false) }
     var newCategoryName by remember { mutableStateOf("") }
-
     var renameTarget by remember { mutableStateOf<LibraryCategoryRow?>(null) }
     var renameText by remember { mutableStateOf("") }
     /** Hộp thoại xác nhận xuất thể loại (Downloads). */
@@ -219,11 +218,12 @@ fun LibraryTab(
         }
     }
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        // Scaffold lồng: tắt contentWindowInsets mặc định (system bars) để tránh padding top thừa dưới TabRow.
-        contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
-    ) { padding ->
+    Box(modifier = modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            // Scaffold lồng: tắt contentWindowInsets mặc định (system bars) để tránh padding top thừa dưới TabRow.
+            contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
+        ) { padding ->
         LazyColumn(
             state = categoryListState,
             modifier =
@@ -329,12 +329,26 @@ fun LibraryTab(
                                             }
                                         },
                             ) {
-                                Text(
-                                    text = cat.name,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = cat.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (cat.isOnline) {
+                                        Text(
+                                            "Web",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.tertiary,
+                                            modifier = Modifier.padding(start = 6.dp),
+                                        )
+                                    }
+                                }
                                 Text(
                                     "${cat.storyCount} truyện",
                                     style = MaterialTheme.typography.labelSmall,
@@ -388,6 +402,7 @@ fun LibraryTab(
                 }
             }
         }
+        }
     }
 
     exportConfirmTarget?.let { cat ->
@@ -405,13 +420,34 @@ fun LibraryTab(
             categoryNameDraft = newCategoryName,
             onCategoryNameDraftChange = { newCategoryName = it },
             onDismissRequest = { showAddCategory = false },
-            onConfirmCreate = { n ->
+            onConfirmCreate = { trimmed, treatAsOnline ->
                 scope.launch {
                     try {
-                        withContext(Dispatchers.IO) { repository.insertCategory(n) }
-                        Toast.makeText(ctx, "Đã tạo thể loại", Toast.LENGTH_SHORT).show()
-                        showAddCategory = false
-                        reload()
+                        if (treatAsOnline) {
+                            val (id, url) =
+                                withContext(Dispatchers.IO) {
+                                    repository.insertOnlineLibraryCategory(trimmed)
+                                }
+                            Toast.makeText(
+                                    ctx,
+                                    "Đã tạo thể loại online và một truyện (URL đã lưu). Selector theo domain trong Cấu hình Parser online.",
+                                    Toast.LENGTH_LONG,
+                                )
+                                .show()
+                            showAddCategory = false
+                            newCategoryName = ""
+                            reload()
+                            onLibraryChanged()
+                        } else {
+                            withContext(Dispatchers.IO) {
+                                repository.insertCategory(trimmed)
+                            }
+                            Toast.makeText(ctx, "Đã tạo thể loại", Toast.LENGTH_SHORT).show()
+                            showAddCategory = false
+                            newCategoryName = ""
+                            reload()
+                            onLibraryChanged()
+                        }
                     } catch (e: Exception) {
                         Toast.makeText(
                             ctx,
@@ -448,6 +484,7 @@ fun LibraryTab(
         )
     }
 }
+
 @Composable
 private fun CategoryReorderDragHandle(
     categoryId: Long,

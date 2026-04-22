@@ -20,6 +20,61 @@ object ParagraphTextService {
     private val singleSentenceEndDot =
         Regex("""(?<![.])\.(?![.])(?=\p{L}|\s|$)""")
 
+    /** `*`, `_`, `+`, `-` (markdown / gạch): gộp lặp, bỏ khoảng trắng kề dấu, dòng chỉ một dấu → rỗng. */
+    private val markdownLikeMarkerChars = setOf('*', '_', '+', '-')
+
+    private fun collapseConsecutiveSameMarkdownMarkers(s: String): String {
+        val out = StringBuilder(s.length)
+        for (c in s) {
+            if (out.isNotEmpty() && c == out.last() && c in markdownLikeMarkerChars) {
+                continue
+            }
+            out.append(c)
+        }
+        return out.toString()
+    }
+
+    private fun removeWhitespaceAdjacentToMarkdownMarkers(s: String): String {
+        val out = StringBuilder(s.length)
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c.isWhitespace()) {
+                val prev = out.lastOrNull()
+                val next = s.getOrNull(i + 1)
+                if ((prev != null && prev in markdownLikeMarkerChars) ||
+                    (next != null && next in markdownLikeMarkerChars)
+                ) {
+                    i++
+                    continue
+                }
+            }
+            out.append(c)
+            i++
+        }
+        return out.toString()
+    }
+
+    /**
+     * - Gộp các ký tự giống nhau liền nhau trong `*`, `_`, `+`, `-` thành một.
+     * - Xóa mọi khoảng trắng (Unicode) kề một trong các dấu đó; lặp ổn định với bước gộp.
+     * - Nếu sau [trim] còn đúng một ký tự và là một trong các dấu trên → chuỗi rỗng.
+     */
+    private fun normalizeMarkdownLikeMarkers(s: String): String {
+        var t = s
+        var iter = 0
+        while (iter < 8) {
+            iter++
+            val a = removeWhitespaceAdjacentToMarkdownMarkers(t)
+            val b = collapseConsecutiveSameMarkdownMarkers(a)
+            if (a == t && b == t) break
+            t = b
+        }
+        val x = t.trim()
+        if (x.length == 1 && x[0] in markdownLikeMarkerChars) return ""
+        return t.trim()
+    }
+
     /**
      * Trong mỗi cặp `"…"`, chỉ [trim] nội dung giữa hai dấu (ví dụ `chào "bạn "` → `chào "bạn"`);
      * `chào "bạn"` giữ nguyên. Không xóa khoảng trắng bên ngoài cặp nháy.
@@ -130,6 +185,7 @@ object ParagraphTextService {
     /**
      * Chuẩn hóa một khối văn: chữ/số và một số dấu; khoảng trắng gộp; `??` → một `?`;
      * trong cặp `"…"` (ASCII) bỏ khoảng trắng thừa đầu/cuối nội dung trong nháy;
+     * với `*`, `_`, `+`, `-`: bỏ khoảng trắng kề dấu, gộp dấu giống liền nhau thành một, dòng chỉ còn một dấu → rỗng;
      * chấm đơn ranh giới câu (không `..`/`...`): bỏ khoảng trắng quanh `.`, nếu sau chấm là chữ Unicode thì chèn một khoảng trắng (vd. `a.b` → `a. b`).
      * Dấu ngoặc kép Unicode (“ ” « » …) được giữ như ký tự hợp lệ (paste từ nguồn khác).
      */
@@ -161,6 +217,9 @@ object ParagraphTextService {
                     ch == ',' ||
                     ch == '-' ||
                     ch == ':' ||
+                    ch == '*' ||
+                    ch == '_' ||
+                    ch == '+' ||
                     isDoubleQuoteLike
             val ok = ch.isLetter() || ch.isDigit() || ch.isUnicodeCombiningMark() || symbol
             when {
@@ -177,7 +236,9 @@ object ParagraphTextService {
         }
         val trimmed = sb.toString().trim()
         return normalizeSingleSentenceDotWhitespace(
-            trimWhitespaceInsideAsciiDoubleQuotedSpans(trimmed),
+            normalizeMarkdownLikeMarkers(
+                trimWhitespaceInsideAsciiDoubleQuotedSpans(trimmed),
+            ),
         )
     }
 
