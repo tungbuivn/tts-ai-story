@@ -48,6 +48,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.HorizontalSplit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -56,7 +57,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -74,6 +74,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -125,7 +126,6 @@ import com.ttsaistory.app.export.TtsAudioExportForegroundService
 import com.ttsaistory.app.export.TtsExportUiCoordinator
 import com.ttsaistory.app.domain.flatIndexFromMainSub
 import com.ttsaistory.app.domain.flatIndexToMainSub
-import com.ttsaistory.app.domain.flatIndexToMainSubPairs
 import com.ttsaistory.app.domain.hasExportableText
 import com.ttsaistory.app.domain.hasSpeakableParagraphFrom
 import com.ttsaistory.app.domain.mergeMainParagraphGroups
@@ -155,8 +155,18 @@ import kotlinx.coroutines.Dispatchers
 import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.yield
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Snapshot một trang lưới đoạn ở chế độ chỉ xem — tránh đọc [paragraphGroupFieldValues] mỗi frame. */
+private data class ReaderParagraphViewPageCell(
+    val mainIdx: Int,
+    val subIdx: Int,
+    val text: String,
+)
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -198,6 +208,10 @@ fun ReaderTab(
     var paragraphFocusRequestToken by remember { mutableIntStateOf(0) }
     var fullTextFieldValue by remember { mutableStateOf(TextFieldValue(text)) }
     var segments by remember { mutableStateOf(emptyList<String>()) }
+    /** Chỉ khi đang sửa ô: chỉ số TTS đầu câu theo từng ô phẳng (toàn truyện). */
+    var flatCellTtsStart by remember { mutableStateOf(intArrayOf()) }
+    /** Chỉ khi chỉ xem: chỉ số TTS cho đúng [paragraphPageItemCount] ô trên trang hiện tại. */
+    var flatPageTtsStart by remember { mutableStateOf(intArrayOf()) }
     val listState = rememberLazyListState()
     var paragraphGroupFieldValues by remember {
         mutableStateOf(
@@ -205,16 +219,11 @@ fun ReaderTab(
         )
     }
     val flatItemCount = paragraphGroupFieldValues.sumOf { it.size }
-    val mergedForPlayToolbar =
-        remember(paragraphGroupFieldValues, paragraphSplitMode, text) {
-            if (paragraphSplitMode) {
-                mergeMainParagraphGroups(
-                    paragraphGroupFieldValues.map { r -> r.map { it.text } },
-                )
-            } else {
-                text
-            }
-        }
+    val paragraphSplitPageSize = AppEditorConstants.PARAGRAPH_SPLIT_PAGE_SIZE
+    var paragraphSplitPageIndex by rememberSaveable { mutableIntStateOf(0) }
+    var paragraphViewOnlyPageCells by remember {
+        mutableStateOf(emptyList<ReaderParagraphViewPageCell>())
+    }
     var playToolbarParagraphsDebounced by remember { mutableStateOf(emptyList<String>()) }
     var toolbarTtsSpeakableCount by remember { mutableStateOf<Int?>(null) }
     var toolbarTtsSplitWorking by remember { mutableStateOf(false) }
@@ -465,6 +474,96 @@ fun ReaderTab(
     val latestParagraphFieldGroups by rememberUpdatedState(paragraphGroupFieldValues)
     val latestOnTextChange by rememberUpdatedState(onTextChange)
     val latestParentText by rememberUpdatedState(text)
+    LaunchedEffect(paragraphSplitMode, textEditorChromeViewOnly) {
+        if (!paragraphSplitMode) {
+            snapshotFlow { text }
+                .collectLatest { snap ->
+                    if (snap.isEmpty()) {
+                        playToolbarParagraphsDebounced = emptyList()
+                        toolbarTtsSpeakableCount = 0
+                        toolbarTtsSplitWorking = false
+                        return@collectLatest
+                    }
+                    delay(AppEditorConstants.PLAY_TOOLBAR_SPLIT_DEBOUNCE_MS)
+                    if (snap != text) return@collectLatest
+                    toolbarTtsSplitWorking = true
+                    val t0 = AnrDiagLog.begin("ReaderTab splitIntoParagraphs(fullTextToolbar) len=${snap.length}")
+                    try {
+                        val paras =
+                            withContext(Dispatchers.Default) { splitIntoParagraphs(snap) }
+                        if (snap != text) {
+                            AnrDiagLog.i("ReaderTab splitIntoParagraphs(fullTextToolbar) dropped")
+                            return@collectLatest
+                        }
+                        playToolbarParagraphsDebounced = paras
+                        toolbarTtsSpeakableCount =
+                            paras.count { sanitizeParagraphText(it).isNotEmpty() }
+                        AnrDiagLog.end(
+                            "ReaderTab splitIntoParagraphs(fullTextToolbar) n=${paras.size}",
+                            t0,
+                        )
+                    } finally {
+                        toolbarTtsSplitWorking = false
+                    }
+                }
+            return@LaunchedEffect
+        }
+        // Chỉ xem: cập nhật tổng câu TTS sau debounce + split; chế độ sửa ô không chạy lại split theo mỗi lần gõ.
+        if (!textEditorChromeViewOnly) {
+            return@LaunchedEffect
+        }
+        snapshotFlow { paragraphGroupFieldValues }
+            .collectLatest { groups ->
+                val rows1 = groups.map { r -> r.map { it.text } }
+                val merged =
+                    withContext(Dispatchers.Default) { mergeMainParagraphGroups(rows1) }
+                if (!paragraphSplitMode) return@collectLatest
+                if (merged.isEmpty()) {
+                    playToolbarParagraphsDebounced = emptyList()
+                    toolbarTtsSpeakableCount =
+                        if (latestParentText.isNotEmpty()) {
+                            null
+                        } else {
+                            0
+                        }
+                    toolbarTtsSplitWorking = false
+                    return@collectLatest
+                }
+                delay(AppEditorConstants.PLAY_TOOLBAR_SPLIT_DEBOUNCE_MS)
+                if (!paragraphSplitMode) return@collectLatest
+                val rows2 = latestParagraphFieldGroups.map { r -> r.map { it.text } }
+                val merged2 =
+                    withContext(Dispatchers.Default) { mergeMainParagraphGroups(rows2) }
+                if (merged != merged2) return@collectLatest
+                toolbarTtsSplitWorking = true
+                val t0 =
+                    AnrDiagLog.begin(
+                        "ReaderTab splitIntoParagraphs(mergedToolbar) len=${merged2.length}",
+                    )
+                try {
+                    val paras =
+                        withContext(Dispatchers.Default) { splitIntoParagraphs(merged2) }
+                    val rows3 = latestParagraphFieldGroups.map { r -> r.map { it.text } }
+                    val merged3 =
+                        withContext(Dispatchers.Default) { mergeMainParagraphGroups(rows3) }
+                    if (merged2 != merged3) {
+                        AnrDiagLog.i(
+                            "ReaderTab splitIntoParagraphs(mergedToolbar) dropped (merged changed)",
+                        )
+                        return@collectLatest
+                    }
+                    playToolbarParagraphsDebounced = paras
+                    toolbarTtsSpeakableCount =
+                        paras.count { sanitizeParagraphText(it).isNotEmpty() }
+                    AnrDiagLog.end(
+                        "ReaderTab splitIntoParagraphs(mergedToolbar) n=${paras.size}",
+                        t0,
+                    )
+                } finally {
+                    toolbarTtsSplitWorking = false
+                }
+            }
+    }
     val fullTextNativeTypingSink = remember { mutableStateOf<(String) -> Unit>({}) }
     SideEffect {
         fullTextNativeTypingSink.value = { s -> latestOnTextChange(s) }
@@ -528,6 +627,7 @@ fun ReaderTab(
         if (!paragraphSplitMode) {
             onTextChange(canonicalTextFromRaw(text))
         }
+        paragraphSplitPageIndex = 0
         paragraphSplitMode = true
     }
 
@@ -601,9 +701,90 @@ fun ReaderTab(
     val latestElevenLabsJobActive by rememberUpdatedState(elevenLabsJobActive)
     val latestOnPlayParagraphs by rememberUpdatedState(onPlayParagraphs)
 
+    fun scrollParagraphLazyToGlobalFlat(globalFlat: Int) {
+        val n = flatItemCount
+        if (n <= 0) return
+        val maxPage = (n + paragraphSplitPageSize - 1) / paragraphSplitPageSize - 1
+        val page = (globalFlat / paragraphSplitPageSize).coerceIn(0, maxPage)
+        paragraphSplitPageIndex = page
+        val ps = page * paragraphSplitPageSize
+        val pageItemCount = (n - ps).coerceAtMost(paragraphSplitPageSize).coerceAtLeast(1)
+        val local = (globalFlat - ps).coerceIn(0, pageItemCount - 1)
+        scope.launch {
+            delay(1)
+            try {
+                listState.scrollToItem(local)
+            } catch (_: IllegalArgumentException) {
+            } catch (e: CancellationException) {
+                throw e
+            }
+        }
+    }
+
+    fun animateParagraphLazyToGlobalFlat(globalFlat: Int) {
+        val n = flatItemCount
+        if (n <= 0) return
+        val maxPage = (n + paragraphSplitPageSize - 1) / paragraphSplitPageSize - 1
+        val page = (globalFlat / paragraphSplitPageSize).coerceIn(0, maxPage)
+        paragraphSplitPageIndex = page
+        val ps = page * paragraphSplitPageSize
+        val pageItemCount = (n - ps).coerceAtMost(paragraphSplitPageSize).coerceAtLeast(1)
+        val local = (globalFlat - ps).coerceIn(0, pageItemCount - 1)
+        scope.launch {
+            delay(1)
+            try {
+                listState.animateScrollToItem(local)
+            } catch (_: IllegalArgumentException) {
+            } catch (e: CancellationException) {
+                throw e
+            }
+        }
+    }
+
+    LaunchedEffect(paragraphSplitMode, flatItemCount, paragraphSplitPageSize) {
+        if (!paragraphSplitMode || flatItemCount <= 0) {
+            paragraphSplitPageIndex = 0
+            return@LaunchedEffect
+        }
+        val maxPage = (flatItemCount + paragraphSplitPageSize - 1) / paragraphSplitPageSize - 1
+        if (paragraphSplitPageIndex > maxPage) {
+            paragraphSplitPageIndex = maxPage
+        }
+    }
+
+    LaunchedEffect(paragraphSplitMode, textEditorChromeViewOnly) {
+        if (!paragraphSplitMode) {
+            flatCellTtsStart = intArrayOf()
+            flatPageTtsStart = intArrayOf()
+            return@LaunchedEffect
+        }
+        // Chỉ xem: TTS theo trang nằm trong LaunchedEffect(snapshot trang) — không giữ mảng n×Int toàn lưới.
+        if (textEditorChromeViewOnly) {
+            flatCellTtsStart = intArrayOf()
+            return@LaunchedEffect
+        }
+        snapshotFlow { paragraphGroupFieldValues }
+            .debounce(AppEditorConstants.TTS_CELL_PREFIX_DEBOUNCE_MS)
+            .collectLatest { groups ->
+                val arr =
+                    withContext(Dispatchers.Default) {
+                        val cells = groups.flatMap { r -> r.map { it.text } }
+                        ttsParagraphStartIndexForEachFlatCell(cells)
+                    }
+                flatCellTtsStart = arr
+            }
+    }
+
     fun goTopOrCaretStartAction() {
         if (paragraphSplitMode) {
-            scope.launch { listState.scrollToItem(0) }
+            paragraphSplitPageIndex = 0
+            focusedParagraphIndex = 0
+            pendingFocusFlatIndex = 0
+            paragraphFocusRequestToken++
+            scope.launch {
+                delay(1)
+                listState.scrollToItem(0)
+            }
         } else {
             val et = fullTextNativeEditRef.get()
             if (et != null &&
@@ -627,7 +808,17 @@ fun ReaderTab(
         if (paragraphSplitMode) {
             val n = latestFlatItemCount
             if (n > 0) {
-                scope.launch { listState.scrollToItem(n - 1) }
+                val maxPage = (n + paragraphSplitPageSize - 1) / paragraphSplitPageSize - 1
+                paragraphSplitPageIndex = maxPage.coerceAtLeast(0)
+                focusedParagraphIndex = n - 1
+                pendingFocusFlatIndex = n - 1
+                paragraphFocusRequestToken++
+                val pageStart = paragraphSplitPageIndex * paragraphSplitPageSize
+                val localLast = (n - 1 - pageStart).coerceAtLeast(0)
+                scope.launch {
+                    delay(1)
+                    listState.scrollToItem(localLast)
+                }
             }
         } else {
             val et = fullTextNativeEditRef.get()
@@ -667,7 +858,29 @@ fun ReaderTab(
         }
     }
 
+    var lastBottomNavPublishKey by remember { mutableStateOf<String?>(null) }
+
     SideEffect {
+        val cellStructureFingerprint =
+            paragraphGroupFieldValues.joinToString(",") { it.size.toString() }
+        val bottomNavPublishKey =
+            listOf(
+                paragraphSplitMode,
+                textEditorChromeViewOnly,
+                flatItemCount,
+                focusedParagraphIndex,
+                cellStructureFingerprint,
+                toolbarTtsSpeakableCount?.toString() ?: "n",
+                toolbarTtsSplitWorking,
+                playToolbarParagraphsDebounced.size,
+                webPrefetchChapterQueueLines.size,
+                activeStoryHasWebUrl,
+                webStoryQueueTargetStoryId?.toString() ?: "null",
+            ).joinToString("|")
+        if (bottomNavPublishKey == lastBottomNavPublishKey) {
+            return@SideEffect
+        }
+        lastBottomNavPublishKey = bottomNavPublishKey
         onRegisterReaderBottomNav?.invoke(
             ReaderBottomNavBridge(
                 paragraphSplitMode = paragraphSplitMode,
@@ -706,17 +919,7 @@ fun ReaderTab(
                             latestOnPlayParagraphs(paras, startTts)
                         }
                     }
-                    scope.launch {
-                        try {
-                            val total = listState.layoutInfo.totalItemsCount
-                            if (total > 0) {
-                                listState.scrollToItem(idx.coerceIn(0, total - 1))
-                            }
-                        } catch (_: IllegalArgumentException) {
-                        } catch (e: CancellationException) {
-                            throw e
-                        }
-                    }
+                    scrollParagraphLazyToGlobalFlat(idx)
                 },
                 readerProgressCurrentOneBased =
                     if (paragraphSplitMode && flatItemCount > 0) {
@@ -903,7 +1106,10 @@ fun ReaderTab(
     // invoke(null) làm mất bridge (slider / +/- không cập nhật).
     val latestRegisterBottomNav by rememberUpdatedState(onRegisterReaderBottomNav)
     DisposableEffect(Unit) {
-        onDispose { latestRegisterBottomNav?.invoke(null) }
+        onDispose {
+            lastBottomNavPublishKey = null
+            latestRegisterBottomNav?.invoke(null)
+        }
     }
 
     DisposableEffect(Unit) {
@@ -944,7 +1150,10 @@ fun ReaderTab(
         fullTextFieldValue = TextFieldValue(text, TextRange(start, a))
     }
 
-    LaunchedEffect(text) {
+    LaunchedEffect(text, paragraphSplitMode, textEditorChromeViewOnly) {
+        // Trong lưới đoạn + chế độ sửa ô, [text] vẫn nhảy theo debounce parent — không cần
+        // paragraphsForEditor toàn văn (ReaderTab chỉ dùng segments khi không split / bookmark).
+        if (paragraphSplitMode && !textEditorChromeViewOnly) return@LaunchedEffect
         val snapshot = text
         val t0 = AnrDiagLog.begin("ReaderTab paragraphsForEditor len=${snapshot.length}")
         val computed =
@@ -957,51 +1166,14 @@ fun ReaderTab(
         }
     }
 
-    LaunchedEffect(mergedForPlayToolbar, paragraphSplitMode) {
-        val snap = mergedForPlayToolbar
-        if (snap.isEmpty()) {
-            playToolbarParagraphsDebounced = emptyList()
-            // Lưới ô chưa khớp [text] (vừa mở truyện / đổi file): merge rỗng nhưng parent vẫn có chữ —
-            // không gán 0 (bottom bar tưởng hết câu); chờ merge đầy rồi split lại.
-            toolbarTtsSpeakableCount =
-                if (paragraphSplitMode && latestParentText.isNotEmpty()) {
-                    null
-                } else {
-                    0
-                }
-            toolbarTtsSplitWorking = false
-            return@LaunchedEffect
-        }
-        if (snap.isNotEmpty()) delay(AppEditorConstants.PLAY_TOOLBAR_SPLIT_DEBOUNCE_MS)
-        if (snap != mergedForPlayToolbar) return@LaunchedEffect
-        // Bỏ tổng cũ trước khi bật working — tránh bottom bar tưởng split xong (còn số cũ) trong khi dialog vẫn "đang tách".
-        toolbarTtsSpeakableCount = null
-        toolbarTtsSplitWorking = true
-        val t0 = AnrDiagLog.begin("ReaderTab splitIntoParagraphs(mergedToolbar) len=${snap.length}")
-        try {
-            val paras =
-                withContext(Dispatchers.Default) { splitIntoParagraphs(snap) }
-            if (snap != mergedForPlayToolbar) {
-                AnrDiagLog.i("ReaderTab splitIntoParagraphs(mergedToolbar) dropped (merged changed)")
-                return@LaunchedEffect
-            }
-            playToolbarParagraphsDebounced = paras
-            toolbarTtsSpeakableCount =
-                paras.count { sanitizeParagraphText(it).isNotEmpty() }
-            AnrDiagLog.end(
-                "ReaderTab splitIntoParagraphs(mergedToolbar) n=${paras.size}",
-                t0,
-            )
-        } finally {
-            toolbarTtsSplitWorking = false
-        }
-    }
-
     LaunchedEffect(librarySyncEpoch) {
         if (librarySyncEpoch <= 0) return@LaunchedEffect
         toolbarTtsSplitWorking = false
-        toolbarTtsSpeakableCount = null
-        if (!paragraphSplitMode) return@LaunchedEffect
+        if (!paragraphSplitMode) {
+            toolbarTtsSpeakableCount = null
+            return@LaunchedEffect
+        }
+        toolbarTtsSplitWorking = true
         persistDebouncer.job?.cancel()
         persistDebouncer.job = null
         val snapshot = text
@@ -1013,6 +1185,7 @@ fun ReaderTab(
             withContext(Dispatchers.Default) { paragraphMainGroupsForEditor(snapshot) }
         if (snapshot != text || !paragraphSplitMode) {
             AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor libSync CANCELLED", t0)
+            toolbarTtsSplitWorking = false
             return@LaunchedEffect
         }
         AnrDiagLog.end(
@@ -1026,11 +1199,37 @@ fun ReaderTab(
                 }
             }
         prevParagraphSplitMode = true
+        try {
+            val mergedFromLib =
+                withContext(Dispatchers.Default) { mergeMainParagraphGroups(segs) }
+            if (mergedFromLib.isEmpty()) {
+                playToolbarParagraphsDebounced = emptyList()
+                toolbarTtsSpeakableCount =
+                    if (text.isNotEmpty()) {
+                        null
+                    } else {
+                        0
+                    }
+            } else {
+                val paras =
+                    withContext(Dispatchers.Default) { splitIntoParagraphs(mergedFromLib) }
+                playToolbarParagraphsDebounced = paras
+                toolbarTtsSpeakableCount =
+                    paras.count { sanitizeParagraphText(it).isNotEmpty() }
+            }
+        } finally {
+            toolbarTtsSplitWorking = false
+        }
     }
 
     LaunchedEffect(paragraphSplitMode, text) {
         if (!paragraphSplitMode) {
             prevParagraphSplitMode = false
+            return@LaunchedEffect
+        }
+        // Đang sửa ô: không gọi paragraphMainGroupsForEditor theo mỗi lần [text] (debounce) —
+        // thoát "chỉ xem" đã flush + chuẩn hoá lưới trong LaunchedEffect(textEditorChromeViewOnly).
+        if (!textEditorChromeViewOnly && prevParagraphSplitMode == true) {
             return@LaunchedEffect
         }
         persistDebouncer.job?.cancel()
@@ -1058,6 +1257,31 @@ fun ReaderTab(
                     }
                 }
             prevParagraphSplitMode = true
+            if (!textEditorChromeViewOnly) {
+                toolbarTtsSplitWorking = true
+                try {
+                    val rows = paragraphGroupFieldValues.map { r -> r.map { it.text } }
+                    val mergedR =
+                        withContext(Dispatchers.Default) { mergeMainParagraphGroups(rows) }
+                    if (mergedR.isEmpty()) {
+                        playToolbarParagraphsDebounced = emptyList()
+                        toolbarTtsSpeakableCount =
+                            if (latestParentText.isNotEmpty()) {
+                                null
+                            } else {
+                                0
+                            }
+                    } else {
+                        val paras =
+                            withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
+                        playToolbarParagraphsDebounced = paras
+                        toolbarTtsSpeakableCount =
+                            paras.count { sanitizeParagraphText(it).isNotEmpty() }
+                    }
+                } finally {
+                    toolbarTtsSplitWorking = false
+                }
+            }
             return@LaunchedEffect
         }
         val cellCount = paragraphGroupFieldValues.sumOf { it.size }
@@ -1076,6 +1300,59 @@ fun ReaderTab(
                         TextFieldValue(text = s, selection = TextRange(s.length))
                     }
                 }
+            if (!textEditorChromeViewOnly) {
+                toolbarTtsSplitWorking = true
+                try {
+                    val rows = paragraphGroupFieldValues.map { r -> r.map { it.text } }
+                    val mergedR =
+                        withContext(Dispatchers.Default) { mergeMainParagraphGroups(rows) }
+                    if (mergedR.isEmpty()) {
+                        playToolbarParagraphsDebounced = emptyList()
+                        toolbarTtsSpeakableCount =
+                            if (latestParentText.isNotEmpty()) {
+                                null
+                            } else {
+                                0
+                            }
+                    } else {
+                        val paras =
+                            withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
+                        playToolbarParagraphsDebounced = paras
+                        toolbarTtsSpeakableCount =
+                            paras.count { sanitizeParagraphText(it).isNotEmpty() }
+                    }
+                } finally {
+                    toolbarTtsSplitWorking = false
+                }
+            }
+        }
+    }
+
+    /** Lưới đoạn + vừa tắt chỉ xem: cập nhật tổng câu bottom bar (không chạy khi đang gõ vì [textEditorChromeViewOnly] không đổi). */
+    LaunchedEffect(textEditorChromeViewOnly, paragraphSplitMode) {
+        if (textEditorChromeViewOnly || !paragraphSplitMode) return@LaunchedEffect
+        yield()
+        toolbarTtsSplitWorking = true
+        try {
+            val rows = paragraphGroupFieldValues.map { r -> r.map { it.text } }
+            val mergedR = withContext(Dispatchers.Default) { mergeMainParagraphGroups(rows) }
+            if (textEditorChromeViewOnly || !paragraphSplitMode) return@LaunchedEffect
+            if (mergedR.isEmpty()) {
+                playToolbarParagraphsDebounced = emptyList()
+                toolbarTtsSpeakableCount =
+                    if (latestParentText.isNotEmpty()) {
+                        null
+                    } else {
+                        0
+                    }
+            } else {
+                val paras = withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
+                playToolbarParagraphsDebounced = paras
+                toolbarTtsSpeakableCount =
+                    paras.count { sanitizeParagraphText(it).isNotEmpty() }
+            }
+        } finally {
+            toolbarTtsSplitWorking = false
         }
     }
 
@@ -1112,15 +1389,7 @@ fun ReaderTab(
         focusedParagraphIndex = ui
         pendingFocusFlatIndex = ui
         paragraphFocusRequestToken++
-        try {
-            val total = listState.layoutInfo.totalItemsCount
-            if (total > 0) {
-                listState.scrollToItem(ui.coerceIn(0, total - 1))
-            }
-        } catch (_: IllegalArgumentException) {
-        } catch (e: CancellationException) {
-            throw e
-        }
+        scrollParagraphLazyToGlobalFlat(ui)
         didScrollToSavedBookmark.value = true
     }
 
@@ -1155,12 +1424,7 @@ fun ReaderTab(
                 focusedParagraphIndex = idx
                 pendingFocusFlatIndex = idx
                 paragraphFocusRequestToken++
-                try {
-                    listState.animateScrollToItem(idx)
-                } catch (_: IllegalArgumentException) {
-                } catch (e: CancellationException) {
-                    throw e
-                }
+                animateParagraphLazyToGlobalFlat(idx)
             }
             saved < 0 -> {
                 focusedParagraphIndex = 0
@@ -1177,12 +1441,7 @@ fun ReaderTab(
                 focusedParagraphIndex = idx
                 pendingFocusFlatIndex = idx
                 paragraphFocusRequestToken++
-                try {
-                    listState.animateScrollToItem(idx)
-                } catch (_: IllegalArgumentException) {
-                } catch (e: CancellationException) {
-                    throw e
-                }
+                animateParagraphLazyToGlobalFlat(idx)
             }
         }
     }
@@ -1648,14 +1907,67 @@ fun ReaderTab(
                 splitParagraphForward(atFlat)
                 return true
             }
-            // Không dùng flatItemCount làm khóa: [1,1] và [2] cùng tổng 2 nhưng cặp (main,sub) khác —
-            // stale pairs gây IndexOutOfBounds khi đọc paragraphGroupFieldValues[main][sub].
-            val paragraphRowSizesFingerprint =
-                paragraphGroupFieldValues.joinToString(",") { it.size.toString() }
-            val flatCellTexts =
-                remember(paragraphGroupFieldValues, paragraphRowSizesFingerprint) {
-                    paragraphGroupFieldValues.flatMap { row -> row.map { it.text } }
+            fun clearParagraphCellText(atFlat: Int) {
+                val gl = paragraphGroupFieldValues.map { it.toMutableList() }.toMutableList()
+                if (gl.isEmpty()) return
+                val (m, s) = flatIndexToMainSub(gl, atFlat)
+                if (m !in gl.indices || s !in gl[m].indices) return
+                gl[m][s] = TextFieldValue("", TextRange(0))
+                paragraphGroupFieldValues = compactParagraphGroupFieldValues(gl)
+                clampFlatFocus()
+                paragraphFocusRequestToken++
+                scheduleDebouncedParagraphParentPersist()
+            }
+            val paragraphPageStartFlat = paragraphSplitPageIndex * paragraphSplitPageSize
+            val paragraphPageEndFlat =
+                (paragraphPageStartFlat + paragraphSplitPageSize).coerceAtMost(flatItemCount)
+            val paragraphPageItemCount = (paragraphPageEndFlat - paragraphPageStartFlat).coerceAtLeast(0)
+            LaunchedEffect(
+                textEditorChromeViewOnly,
+                paragraphSplitMode,
+                paragraphSplitPageIndex,
+                paragraphSplitPageSize,
+                flatItemCount,
+                paragraphGroupFieldValues,
+            ) {
+                if (!paragraphSplitMode || !textEditorChromeViewOnly || flatItemCount <= 0) {
+                    paragraphViewOnlyPageCells = emptyList()
+                    flatPageTtsStart = intArrayOf()
+                    return@LaunchedEffect
                 }
+                val pageStart = paragraphSplitPageIndex * paragraphSplitPageSize
+                val pageEnd =
+                    (pageStart + paragraphSplitPageSize).coerceAtMost(flatItemCount)
+                val groups = paragraphGroupFieldValues
+                val (built, pageTts) =
+                    withContext(Dispatchers.Default) {
+                        val cells = groups.flatMap { r -> r.map { it.text } }
+                        val fullTts = ttsParagraphStartIndexForEachFlatCell(cells)
+                        val pageList = ArrayList<ReaderParagraphViewPageCell>(pageEnd - pageStart)
+                        var f = 0
+                        outer@ for (mi in groups.indices) {
+                            for (si in groups[mi].indices) {
+                                if (f >= pageEnd) break@outer
+                                if (f >= pageStart) {
+                                    pageList.add(
+                                        ReaderParagraphViewPageCell(
+                                            mainIdx = mi,
+                                            subIdx = si,
+                                            text = cells[f],
+                                        ),
+                                    )
+                                }
+                                f++
+                            }
+                        }
+                        pageList to fullTts.copyOfRange(pageStart, pageEnd)
+                    }
+                if (!paragraphSplitMode || !textEditorChromeViewOnly) {
+                    return@LaunchedEffect
+                }
+                paragraphViewOnlyPageCells = built
+                flatPageTtsStart = pageTts
+            }
             val paragraphViewSplitTextStyle =
                 remember(editorAppearance.editorBodyStyle, editorAppearance.paragraphEditorFontFamily, editorAppearance.editorLineSpacingMultiplier) {
                     editorAppearance.editorBodyStyle.copy(
@@ -1682,12 +1994,8 @@ fun ReaderTab(
                 MaterialTheme.typography.labelSmall.copy(
                     fontFamily = editorAppearance.paragraphEditorFontFamily,
                 )
-            val flatCellTtsStart =
-                remember(flatCellTexts) { ttsParagraphStartIndexForEachFlatCell(flatCellTexts) }
-            val flatMainSubPairs =
-                remember(paragraphGroupFieldValues, paragraphRowSizesFingerprint) {
-                    flatIndexToMainSubPairs(paragraphGroupFieldValues)
-                }
+            val paragraphCellSelectionColors =
+                OutlinedTextFieldDefaults.colors().textSelectionColors
             val density = LocalDensity.current
             val paragraphCellVerticalGap =
                 remember(
@@ -1712,23 +2020,66 @@ fun ReaderTab(
                     ),
             ) {
                 items(
-                    count = flatMainSubPairs.size,
-                    key = { flatIdx ->
-                        val p = flatMainSubPairs.getOrNull(flatIdx)
-                        if (p != null) "${p.first}_${p.second}" else "missing_$flatIdx"
+                    count = paragraphPageItemCount,
+                    key = { localIdx ->
+                        val flatIdx = paragraphPageStartFlat + localIdx
+                        if (textEditorChromeViewOnly &&
+                            paragraphPageItemCount > 0 &&
+                            paragraphViewOnlyPageCells.size == paragraphPageItemCount
+                        ) {
+                            val c = paragraphViewOnlyPageCells[localIdx]
+                            "${c.mainIdx}_${c.subIdx}"
+                        } else {
+                            val p = flatIndexToMainSub(paragraphGroupFieldValues, flatIdx)
+                            "${p.first}_${p.second}"
+                        }
                     },
                     contentType = { _ -> "paragraphCell" },
-                ) { flatIdx ->
-                    val pair = flatMainSubPairs.getOrNull(flatIdx) ?: return@items
-                    val (mainIdx, subIdx) = pair
+                ) { localIdx ->
+                    val flatIdx = paragraphPageStartFlat + localIdx
+                    val snapshotOk =
+                        textEditorChromeViewOnly &&
+                            paragraphPageItemCount > 0 &&
+                            paragraphViewOnlyPageCells.size == paragraphPageItemCount
+                    val viewCell = paragraphViewOnlyPageCells.getOrNull(localIdx)
+                    val (mainIdx, subIdx) =
+                        if (snapshotOk && viewCell != null) {
+                            viewCell.mainIdx to viewCell.subIdx
+                        } else {
+                            flatIndexToMainSub(paragraphGroupFieldValues, flatIdx)
+                        }
                     val ttsStartAtCell =
-                        if (flatIdx < flatCellTtsStart.size) flatCellTtsStart[flatIdx] else 0
+                        if (textEditorChromeViewOnly &&
+                            paragraphPageItemCount > 0 &&
+                            flatPageTtsStart.size == paragraphPageItemCount
+                        ) {
+                            flatPageTtsStart.getOrNull(localIdx) ?: 0
+                        } else if (flatIdx < flatCellTtsStart.size) {
+                            flatCellTtsStart[flatIdx]
+                        } else {
+                            0
+                        }
                     val highlightCurrentSpeakingParagraph =
                         speakingParagraphIndex >= 0 &&
                             ttsStartAtCell == speakingParagraphIndex
-                    val para =
-                        paragraphGroupFieldValues.getOrNull(mainIdx)?.getOrNull(subIdx)
-                            ?: return@items
+                    val paraForEdit: TextFieldValue? =
+                        if (textEditorChromeViewOnly) {
+                            null
+                        } else {
+                            paragraphGroupFieldValues.getOrNull(mainIdx)?.getOrNull(subIdx)
+                                ?: return@items
+                        }
+                    val viewLineText: String =
+                        if (textEditorChromeViewOnly) {
+                            if (snapshotOk && viewCell != null) {
+                                viewCell.text
+                            } else {
+                                paragraphGroupFieldValues.getOrNull(mainIdx)?.getOrNull(subIdx)?.text
+                                    ?: return@items
+                            }
+                        } else {
+                            ""
+                        }
                     val cellFocusRequester = remember(flatIdx) { FocusRequester() }
                     LaunchedEffect(
                         paragraphSplitMode,
@@ -1737,7 +2088,7 @@ fun ReaderTab(
                         textEditorChromeViewOnly,
                         flatIdx,
                     ) {
-                        if (!paragraphSplitMode || flatMainSubPairs.isEmpty()) return@LaunchedEffect
+                        if (!paragraphSplitMode || flatItemCount <= 0) return@LaunchedEffect
                         if (focusedParagraphIndex != flatIdx) return@LaunchedEffect
                         try {
                             cellFocusRequester.requestFocus()
@@ -1839,7 +2190,7 @@ fun ReaderTab(
                         ) {
                             if (textEditorChromeViewOnly) {
                                 Text(
-                                    text = para.text,
+                                    text = viewLineText,
                                     style = paragraphViewSplitTextStyle,
                                     color = MaterialTheme.colorScheme.onSurface,
                                     modifier =
@@ -1857,125 +2208,176 @@ fun ReaderTab(
                                             },
                                 )
                             } else {
-                                OutlinedTextField(
-                                    value = para,
-                                    readOnly = false,
-                                    interactionSource = cellParagraphInteractionSource,
-                                    textStyle = paragraphOutlineEditTextStyle,
-                                    onValueChange = outVc@{ newVal ->
-                                        val old = para
-                                        if (flatIdx > 0 &&
-                                            old.selection.collapsed &&
-                                            old.selection.start == 0 &&
-                                            old.text.isNotEmpty() &&
-                                            newVal.text == old.text.drop(1)
+                                val cellOutlineColor =
+                                    if (focusedParagraphIndex == flatIdx) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.outline
+                                    }
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.Top,
+                                ) {
+                                    if (focusedParagraphIndex == flatIdx) {
+                                        IconButton(
+                                            onClick = {
+                                                keyboardController?.hide()
+                                                clearParagraphCellText(flatIdx)
+                                            },
+                                            enabled = paraForEdit!!.text.isNotEmpty(),
                                         ) {
-                                            if (mergeParagraphBackward(flatIdx)) return@outVc
+                                            Icon(
+                                                Icons.Filled.Delete,
+                                                contentDescription = "Xóa nội dung câu",
+                                            )
                                         }
-                                        val gl =
-                                            paragraphGroupFieldValues
-                                                .map { it.toMutableList() }
-                                                .toMutableList()
-                                        if (mainIdx in gl.indices && subIdx in gl[mainIdx].indices) {
-                                            gl[mainIdx][subIdx] = newVal
-                                            paragraphGroupFieldValues =
-                                                compactParagraphGroupFieldValues(gl)
-                                            clampFlatFocus()
-                                            scheduleDebouncedParagraphParentPersist()
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Câu ${subIdx + 1}",
+                                            style = paragraphCellSentenceLabelStyle,
+                                            modifier = Modifier.padding(bottom = 4.dp),
+                                        )
+                                        CompositionLocalProvider(
+                                            LocalTextSelectionColors provides paragraphCellSelectionColors,
+                                        ) {
+                                            BasicTextField(
+                                                value = paraForEdit!!,
+                                                onValueChange = outVc@{ newVal ->
+                                                    val old =
+                                                        paragraphGroupFieldValues
+                                                            .getOrNull(mainIdx)
+                                                            ?.getOrNull(subIdx)
+                                                            ?: return@outVc
+                                                    if (flatIdx > 0 &&
+                                                        old.selection.collapsed &&
+                                                        old.selection.start == 0 &&
+                                                        old.text.isNotEmpty() &&
+                                                        newVal.text == old.text.drop(1)
+                                                    ) {
+                                                        if (mergeParagraphBackward(flatIdx)) return@outVc
+                                                    }
+                                                    val gl =
+                                                        paragraphGroupFieldValues
+                                                            .map { it.toMutableList() }
+                                                            .toMutableList()
+                                                    if (mainIdx in gl.indices && subIdx in gl[mainIdx].indices) {
+                                                        gl[mainIdx][subIdx] = newVal
+                                                        paragraphGroupFieldValues =
+                                                            compactParagraphGroupFieldValues(gl)
+                                                        clampFlatFocus()
+                                                        scheduleDebouncedParagraphParentPersist()
+                                                    }
+                                                },
+                                                modifier =
+                                                    Modifier
+                                                        .fillMaxWidth()
+                                                        .heightIn(max = 320.dp)
+                                                        .focusRequester(cellFocusRequester)
+                                                        .onFocusChanged { fs ->
+                                                            if (fs.isFocused) {
+                                                                focusedParagraphIndex = flatIdx
+                                                                persistLastReadingBookmarkFromEditorFieldFlat(
+                                                                    latestParagraphFieldGroups,
+                                                                    flatIdx,
+                                                                )
+                                                            }
+                                                        }
+                                                        .onPreviewKeyEvent { ev ->
+                                                            if (ev.type != KeyEventType.KeyDown) {
+                                                                return@onPreviewKeyEvent false
+                                                            }
+                                                            when {
+                                                                ev.key == Key.Backspace ||
+                                                                    ev.key == Key.Delete ->
+                                                                    mergeParagraphBackward(flatIdx)
+                                                                (ev.key == Key.Enter || ev.key == Key.NumPadEnter) &&
+                                                                    ev.isShiftPressed ->
+                                                                    splitParagraphForward(flatIdx)
+                                                                else -> false
+                                                            }
+                                                        },
+                                                textStyle = paragraphOutlineEditTextStyle,
+                                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                                interactionSource = cellParagraphInteractionSource,
+                                                keyboardOptions = KeyboardOptions.Default,
+                                                keyboardActions = KeyboardActions.Default,
+                                                maxLines = Int.MAX_VALUE,
+                                                minLines = 1,
+                                                decorationBox = { innerTextField ->
+                                                    Box(
+                                                        modifier =
+                                                            Modifier
+                                                                .fillMaxWidth()
+                                                                .border(
+                                                                    width = 1.dp,
+                                                                    color = cellOutlineColor,
+                                                                    shape = RoundedCornerShape(8.dp),
+                                                                )
+                                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                    ) {
+                                                        innerTextField()
+                                                    }
+                                                },
+                                            )
                                         }
-                                    },
-                                    modifier =
-                                        Modifier
-                                            .weight(1f)
-                                            .heightIn(max = 320.dp)
-                                            .focusRequester(cellFocusRequester)
-                                            .onFocusChanged { fs ->
-                                                if (fs.isFocused) {
-                                                    focusedParagraphIndex = flatIdx
-                                                    persistLastReadingBookmarkFromEditorFieldFlat(
-                                                        latestParagraphFieldGroups,
-                                                        flatIdx,
+                                    }
+                                    if (focusedParagraphIndex == flatIdx) {
+                                        Column(
+                                            modifier = Modifier.padding(top = 6.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                        ) {
+                                            if (flatIdx > 0) {
+                                                IconButton(
+                                                    onClick = {
+                                                        keyboardController?.hide()
+                                                        if (!mergeParagraphBackward(
+                                                                flatIdx,
+                                                                requireCaretAtStart = false,
+                                                            )
+                                                        ) {
+                                                            Toast.makeText(
+                                                                ctx,
+                                                                "Không thể nối với câu trước.",
+                                                                Toast.LENGTH_SHORT,
+                                                            ).show()
+                                                        }
+                                                    },
+                                                ) {
+                                                    Icon(
+                                                        Icons.AutoMirrored.Filled.MergeType,
+                                                        contentDescription = "Nối với câu trước",
                                                     )
                                                 }
                                             }
-                                            .onPreviewKeyEvent { ev ->
-                                                if (ev.type != KeyEventType.KeyDown) {
-                                                    return@onPreviewKeyEvent false
-                                                }
-                                                when {
-                                                    ev.key == Key.Backspace ||
-                                                        ev.key == Key.Delete ->
-                                                        mergeParagraphBackward(flatIdx)
-                                                    (ev.key == Key.Enter || ev.key == Key.NumPadEnter) &&
-                                                        ev.isShiftPressed ->
-                                                        splitParagraphForward(flatIdx)
-                                                    else -> false
-                                                }
-                                            },
-                                    label = {
-                                        Text(
-                                            "Câu ${subIdx + 1}",
-                                            style = paragraphCellSentenceLabelStyle,
-                                        )
-                                    },
-                                    minLines = 1,
-                                    colors = OutlinedTextFieldDefaults.colors(),
-                                )
-                            }
-                            if (!textEditorChromeViewOnly && focusedParagraphIndex == flatIdx) {
-                            Column(
-                                modifier = Modifier.padding(top = 6.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                if (flatIdx > 0) {
-                                    IconButton(
-                                        onClick = {
-                                            keyboardController?.hide()
-                                            if (!mergeParagraphBackward(
-                                                    flatIdx,
-                                                    requireCaretAtStart = false,
-                                                )
+                                            IconButton(
+                                                onClick = {
+                                                    keyboardController?.hide()
+                                                    if (focusedParagraphIndex != flatIdx) {
+                                                        Toast.makeText(
+                                                            ctx,
+                                                            "Chạm vào ô câu này, đặt con trỏ tại chỗ tách, rồi bấm lại.",
+                                                            Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                        return@IconButton
+                                                    }
+                                                    if (!splitParagraphAtCaretForToolbar(flatIdx)) {
+                                                        Toast.makeText(
+                                                            ctx,
+                                                            "Đặt con trỏ giữa nội dung để tách thành đoạn mới (như xuống dòng).",
+                                                            Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                    }
+                                                },
                                             ) {
-                                                Toast.makeText(
-                                                    ctx,
-                                                    "Không thể nối với câu trước.",
-                                                    Toast.LENGTH_SHORT,
-                                                ).show()
+                                                Icon(
+                                                    Icons.Filled.HorizontalSplit,
+                                                    contentDescription = "Tách đoạn mới tại con trỏ (như xuống dòng)",
+                                                )
                                             }
-                                        },
-                                    ) {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.MergeType,
-                                            contentDescription = "Nối với câu trước",
-                                        )
+                                        }
                                     }
                                 }
-                                IconButton(
-                                    onClick = {
-                                        keyboardController?.hide()
-                                        if (focusedParagraphIndex != flatIdx) {
-                                            Toast.makeText(
-                                                ctx,
-                                                "Chạm vào ô câu này, đặt con trỏ tại chỗ tách, rồi bấm lại.",
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
-                                            return@IconButton
-                                        }
-                                        if (!splitParagraphAtCaretForToolbar(flatIdx)) {
-                                            Toast.makeText(
-                                                ctx,
-                                                "Đặt con trỏ giữa nội dung để tách thành đoạn mới (xuống dòng).",
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
-                                    },
-                                ) {
-                                    Icon(
-                                        Icons.Filled.HorizontalSplit,
-                                        contentDescription = "Tách đoạn mới tại con trỏ (như xuống dòng)",
-                                    )
-                                }
-                            }
                             }
                         }
                     }

@@ -3,6 +3,8 @@ package com.ttsaistory.app.ui.reader
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -36,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.ttsaistory.app.AnrDiagLog
 import com.ttsaistory.app.domain.sanitizeParagraphText
+import com.ttsaistory.app.model.TextTabSpeechEngine
 import kotlin.math.roundToInt
 import com.ttsaistory.app.domain.splitIntoParagraphs
 import java.util.Locale
@@ -51,6 +54,8 @@ fun MainBottomBar(
     /** Đổi khi mở/sync truyện — tính lại tổng câu TTS cùng lúc vào tab Text. */
     librarySyncEpoch: Int,
     activeLibraryStoryId: Long?,
+    textTabSpeechEngine: TextTabSpeechEngine,
+    systemTtsQueuedParagraphUtterances: Int,
 ) {
     var totalSpeakableDeferred by remember { mutableStateOf<Int?>(null) }
     // Không key theo [text]: tránh splitIntoParagraphs toàn văn mỗi lần gõ; chỉ khi vào tab Text
@@ -278,15 +283,30 @@ fun MainBottomBar(
                             .padding(end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = statusLine,
+                    Column(
                         modifier =
                             Modifier
                                 .weight(1f)
                                 .padding(start = 16.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    ) {
+                        Text(
+                            text = statusLine,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (tabIndex == 0 &&
+                            textTabSpeechEngine == TextTabSpeechEngine.System &&
+                            systemTtsQueuedParagraphUtterances > 0
+                        ) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text =
+                                    "Hàng đợi TTS: ${systemTtsQueuedParagraphUtterances} câu",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
                     if (tabIndex == 0) {
                         val navRow = readerBottomNavBridge
                         if (navRow != null) {

@@ -90,6 +90,8 @@ fun AppModalNavigationDrawerScaffold(
     elevenLabsPlayJob: Job?,
     /** Loạt đọc TTS hệ thống còn utterance (không dùng [TextToSpeech.isSpeaking] cho nút Play). */
     systemTtsPlaybackActive: Boolean,
+    /** Số câu (utterance đoạn) còn trong pipeline queue TTS hệ thống — hiển thị trên bottom bar. */
+    systemTtsQueuedParagraphUtterances: Int,
     onEditorTextChange: (String) -> Unit,
     onTextTabSpeechEngineChange: (TextTabSpeechEngine) -> Unit,
     onStopAllSpeechReading: () -> Unit,
@@ -299,6 +301,8 @@ fun AppModalNavigationDrawerScaffold(
                     readerBottomNavBridge = readerBottomNavBridge,
                     librarySyncEpoch = librarySyncEpoch,
                     activeLibraryStoryId = activeLibraryStoryId,
+                    textTabSpeechEngine = textTabSpeechEngine,
+                    systemTtsQueuedParagraphUtterances = systemTtsQueuedParagraphUtterances,
                 )
             },
         ) { innerPadding ->

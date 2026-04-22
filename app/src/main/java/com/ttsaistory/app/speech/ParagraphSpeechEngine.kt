@@ -17,4 +17,9 @@ interface ParagraphSpeechEngine {
         startIndex: Int,
         callbacks: ParagraphSpeechSequenceCallbacks,
     ): Boolean
+
+    /**
+     * Chỉ TTS hệ thống dùng: sau mỗi utterance đoạn (xong/lỗi), enqueue đoạn kế nếu còn phiên phát chunked.
+     */
+    fun onSystemTtsParagraphUtteranceFinished(utteranceId: String?) {}
 }

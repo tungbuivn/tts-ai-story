@@ -1095,6 +1095,11 @@ fun AppTabs() {
                         ) {
                             libraryStoryAutoAdvanceHook.run()
                         }
+                        if (wasParagraph && textTabSpeechEngine == TextTabSpeechEngine.System) {
+                            systemParagraphSpeechEngine.onSystemTtsParagraphUtteranceFinished(
+                                utteranceId,
+                            )
+                        }
                     }
 
                     override fun onUtteranceError(utteranceId: String?) {
@@ -1105,6 +1110,13 @@ fun AppTabs() {
                             systemTtsStoryUtterancesRemaining > 0
                         ) {
                             systemTtsStoryUtterancesRemaining--
+                        }
+                        if (parseTtsParagraphIndex(utteranceId) != null &&
+                            textTabSpeechEngine == TextTabSpeechEngine.System
+                        ) {
+                            systemParagraphSpeechEngine.onSystemTtsParagraphUtteranceFinished(
+                                utteranceId,
+                            )
                         }
                     }
                 }
@@ -1212,6 +1224,8 @@ fun AppTabs() {
             ttsReady = ttsReady,
             elevenLabsPlayJob = elevenLabsPlayJob,
             systemTtsPlaybackActive = systemTtsPlaybackActive,
+            systemTtsQueuedParagraphUtterances =
+                systemParagraphSpeechEngine.queuedParagraphUtterancePipelineDepth(),
             onEditorTextChange = { newText ->
                 text = newText
                 prefs.saveLastText(newText)

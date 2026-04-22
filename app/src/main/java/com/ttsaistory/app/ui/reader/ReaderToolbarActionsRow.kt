@@ -1,14 +1,18 @@
 package com.ttsaistory.app.ui.reader
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.automirrored.outlined.NoteAdd
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Refresh
@@ -16,14 +20,16 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 
 /**
  * Cột nút công cụ tab nhập văn: xem/chỉnh sửa, phát, dừng, xuất AAC, (truyện web) tải lại nội dung,
- * chuyển thể loại, truyện mới; kèm hàng chế độ đoạn khi đang chỉnh sửa.
+ * chuyển thể loại, truyện mới; một nút chuyển toàn văn / lưới đoạn (sau xuất AAC) khi đang chỉnh sửa.
  */
 @Composable
 internal fun ReaderToolbarActionsColumn(
@@ -99,6 +105,39 @@ internal fun ReaderToolbarActionsColumn(
                     contentDescription = "Lưu AAC (.m4a)",
                 )
             }
+            if (!textEditorChromeViewOnly) {
+                IconButton(
+                    onClick = {
+                        if (paragraphSplitMode) {
+                            onSwitchToFullTextMode()
+                        } else {
+                            onSwitchToParagraphSplitMode()
+                        }
+                    },
+                    modifier =
+                        Modifier
+                            .clip(CircleShape)
+                            .background(
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                            ),
+                ) {
+                    Icon(
+                        imageVector =
+                            if (paragraphSplitMode) {
+                                Icons.Filled.DynamicFeed
+                            } else {
+                                Icons.AutoMirrored.Filled.Article
+                            },
+                        contentDescription =
+                            if (paragraphSplitMode) {
+                                "Đang theo đoạn — chạm để toàn văn"
+                            } else {
+                                "Đang toàn văn — chạm để theo đoạn"
+                            },
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
             if (showReloadWebContent) {
                 IconButton(
                     onClick = onReloadWebContentClick,
@@ -129,13 +168,6 @@ internal fun ReaderToolbarActionsColumn(
                     contentDescription = "Truyện mới (trống)",
                 )
             }
-        }
-        if (!textEditorChromeViewOnly) {
-            ReaderParagraphModeToggleRow(
-                paragraphSplitMode = paragraphSplitMode,
-                onSwitchToFullTextMode = onSwitchToFullTextMode,
-                onSwitchToParagraphSplitMode = onSwitchToParagraphSplitMode,
-            )
         }
     }
 }

@@ -5,7 +5,16 @@ object AppEditorConstants {
     const val PARAGRAPH_FIELD_PERSIST_DEBOUNCE_MS = 1000L
 
     /** Chế độ một khối: dùng EditText khi văn bản ≥ ngưỡng (Compose quá nặng với văn cực dài). */
-    const val FULL_TEXT_NATIVE_EDITOR_MIN_CHARS = 120_000
+    const val FULL_TEXT_NATIVE_EDITOR_MIN_CHARS = 32_000
+
+    /** Lưới đoạn: số ô (câu) tối đa trên một trang — giảm composition/layout một lần. */
+    const val PARAGRAPH_SPLIT_PAGE_SIZE = 1000000
+
+    /** TTS hệ thống: số utterance tối đa queue ban đầu; mỗi đoạn xong sẽ thêm 1 đoạn kế (giữ hàng đợi gọn). */
+    const val SYSTEM_TTS_PLAY_MAX_ENQUEUED_UTTERANCES = 5
+
+    /** Lưới đoạn + sửa: debounce tính mảng chỉ số TTS (tránh O(n) mỗi phím). */
+    const val TTS_CELL_PREFIX_DEBOUNCE_MS = 280L
 
     /** Debounce tách đoạn cho trạng thái nút Play (không ảnh hưởng onClick — vẫn tính lúc bấm). */
     const val PLAY_TOOLBAR_SPLIT_DEBOUNCE_MS = 160L
