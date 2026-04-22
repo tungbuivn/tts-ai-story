@@ -115,6 +115,8 @@ import com.ttsaistory.app.data.LibraryCategoryRow
 import com.ttsaistory.app.data.LibraryStoryRow
 import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.elevenlabs.ElevenLabsPrefKeys
+import com.ttsaistory.app.ui.fonts.editorLineHeightSp
+import com.ttsaistory.app.ui.fonts.rememberTextInputTabEditorAppearance
 import com.ttsaistory.app.domain.canonicalTextFromRaw
 import com.ttsaistory.app.domain.charOffsetForEditorFlatCellInMerged
 import com.ttsaistory.app.domain.editorUiFlatForTtsParagraphStartIndexForFlatCells
@@ -1533,8 +1535,12 @@ fun TextInputTab(
                 splitParagraphForward(atFlat)
                 return true
             }
+            // Không dùng flatItemCount làm khóa: [1,1] và [2] cùng tổng 2 nhưng cặp (main,sub) khác —
+            // stale pairs gây IndexOutOfBounds khi đọc paragraphGroupFieldValues[main][sub].
+            val paragraphRowSizesFingerprint =
+                paragraphGroupFieldValues.joinToString(",") { it.size.toString() }
             val flatCellTexts =
-                remember(paragraphGroupFieldValues, flatItemCount) {
+                remember(paragraphGroupFieldValues, paragraphRowSizesFingerprint) {
                     paragraphGroupFieldValues.flatMap { row -> row.map { it.text } }
                 }
             val paragraphViewSplitTextStyle =
@@ -1547,7 +1553,7 @@ fun TextInputTab(
             val flatCellTtsStart =
                 remember(flatCellTexts) { ttsParagraphStartIndexForEachFlatCell(flatCellTexts) }
             val flatMainSubPairs =
-                remember(paragraphGroupFieldValues, flatItemCount) {
+                remember(paragraphGroupFieldValues, paragraphRowSizesFingerprint) {
                     flatIndexToMainSubPairs(paragraphGroupFieldValues)
                 }
             val density = LocalDensity.current
@@ -1587,7 +1593,9 @@ fun TextInputTab(
                     val highlightCurrentSpeakingParagraph =
                         speakingParagraphIndex >= 0 &&
                             ttsStartAtCell == speakingParagraphIndex
-                    val para = paragraphGroupFieldValues[mainIdx][subIdx]
+                    val para =
+                        paragraphGroupFieldValues.getOrNull(mainIdx)?.getOrNull(subIdx)
+                            ?: return@items
                     val cellFocusRequester = remember(flatIdx) { FocusRequester() }
                     LaunchedEffect(
                         paragraphSplitMode,

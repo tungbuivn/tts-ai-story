@@ -1,4 +1,8 @@
-package com.ttsaistory.app.domain
+/**
+ * Sao chép nội dung font từ [android.net.Uri] (Storage Access Framework) vào thư mục nội bộ của app
+ * để dùng ổn định sau khi người dùng chọn file qua hệ thống.
+ */
+package com.ttsaistory.app.ui.fonts
 
 import android.content.Context
 import android.net.Uri

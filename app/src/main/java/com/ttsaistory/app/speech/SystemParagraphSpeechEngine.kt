@@ -55,6 +55,7 @@ class SystemParagraphSpeechEngine(
                     dispatch { sink.onUtteranceDone(utteranceId) }
                 }
 
+                @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
                     dispatch { sink.onUtteranceError(utteranceId) }
                 }

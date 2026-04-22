@@ -1,4 +1,8 @@
-package com.ttsaistory.app.ui.tab
+/**
+ * [androidx.compose.material3.AlertDialog] cấu hình font: cỡ chữ, khoảng cách dòng, thư mục quét,
+ * danh sách chọn font (đĩa hoặc SAF), nút mặc định và đóng; ghi prefs khi chọn font hoặc reset.
+ */
+package com.ttsaistory.app.ui.fonts
 
 import android.content.SharedPreferences
 import android.widget.Toast
@@ -30,11 +34,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.ttsaistory.app.domain.clearEditorFontDialogPrefs
-import com.ttsaistory.app.domain.copyUriToEditorFontFile
-import com.ttsaistory.app.domain.editorFontChosenDisplayName
-import com.ttsaistory.app.domain.editorFontImportSafeFileName
-import com.ttsaistory.app.domain.setEditorFontPathForBothRegions
 import com.ttsaistory.app.model.AppPreferenceKeys
 import java.util.Locale
 

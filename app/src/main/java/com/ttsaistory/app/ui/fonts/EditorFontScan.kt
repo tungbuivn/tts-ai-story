@@ -1,4 +1,8 @@
-package com.ttsaistory.app.ui.tab
+/**
+ * Quét thư mục đĩa hoặc cây SAF để liệt kê font .ttf/.otf, đọc thư mục quét từ prefs,
+ * và dựng danh sách hàng chọn font cho hộp thoại cấu hình.
+ */
+package com.ttsaistory.app.ui.fonts
 
 import android.content.Context
 import android.content.SharedPreferences

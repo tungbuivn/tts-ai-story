@@ -1,4 +1,8 @@
-package com.ttsaistory.app.ui.tab
+/**
+ * Gom trạng thái hiển thị tab nhập liệu (đường dẫn font, [androidx.compose.ui.text.font.FontFamily],
+ * cỡ chữ, khoảng cách dòng, [androidx.compose.ui.text.TextStyle] nền) từ prefs và epoch làm mới font để Compose remember.
+ */
+package com.ttsaistory.app.ui.fonts
 
 import android.content.SharedPreferences
 import androidx.compose.material3.MaterialTheme

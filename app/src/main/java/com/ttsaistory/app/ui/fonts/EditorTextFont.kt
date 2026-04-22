@@ -1,4 +1,8 @@
-package com.ttsaistory.app.ui.tab
+/**
+ * Ánh xạ đường dẫn font tệp (.ttf/.otf) sang [androidx.compose.ui.text.font.FontFamily] cho vùng soạn,
+ * và tiện ích chiều cao dòng theo hệ số nhân so với [androidx.compose.ui.text.TextStyle].
+ */
+package com.ttsaistory.app.ui.fonts
 
 import android.graphics.Typeface
 import androidx.compose.ui.text.TextStyle

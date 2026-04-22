@@ -1,4 +1,8 @@
-package com.ttsaistory.app.ui.tab
+/**
+ * Composable cửa sổ cấu hình font vùng soạn: launcher chọn cây thư mục SAF, đồng bộ prefs thư mục quét,
+ * quét danh sách font trên IO và ủy nhiệm UI chi tiết cho [EditorFontConfigAlertDialog].
+ */
+package com.ttsaistory.app.ui.fonts
 
 import android.content.Intent
 import android.content.SharedPreferences

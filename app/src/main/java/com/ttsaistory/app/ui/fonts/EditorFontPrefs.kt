@@ -1,4 +1,8 @@
-package com.ttsaistory.app.domain
+/**
+ * Extension [android.content.SharedPreferences] và hàm phụ trợ: gán đường dẫn font cho cả hai vùng soạn,
+ * xóa prefs hộp thoại font, tên hiển thị font đang chọn, và tên tệp an toàn khi import.
+ */
+package com.ttsaistory.app.ui.fonts
 
 import android.content.SharedPreferences
 import com.ttsaistory.app.model.AppPreferenceKeys
