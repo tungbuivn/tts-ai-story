@@ -29,6 +29,13 @@ object ParagraphTextService {
     private var parseStoredTextCacheRaw: String? = null
     private var parseStoredTextCacheResult: List<List<String>>? = null
 
+    /** Danh sách câu phẳng lần parse cuối — export AAC dùng trực tiếp, không cần so khớp raw. */
+    private var aacExportCacheFlatSentences: List<String>? = null
+
+    private fun publishAacExportFlatCache(groups: List<List<String>>) {
+        aacExportCacheFlatSentences = groups.flatten()
+    }
+
     private fun publishTotalItemCountFromGroups(groups: List<List<String>>) {
         val n =
             groups.sumOf { row ->
@@ -648,12 +655,14 @@ object ParagraphTextService {
         if (raw.isEmpty()) {
             val empty = listOf(listOf(""))
             publishTotalItemCountFromGroups(empty)
+            publishAacExportFlatCache(empty)
             return empty
         }
         val body = raw.trimEnd('\r', '\n')
         if (body.isEmpty()) {
             val empty = listOf(listOf(""))
             publishTotalItemCountFromGroups(empty)
+            publishAacExportFlatCache(empty)
             return empty
         }
         val mergedLines =
@@ -673,7 +682,18 @@ object ParagraphTextService {
                 }
                 .ifEmpty { listOf(listOf("")) }
         publishTotalItemCountFromGroups(result)
+        publishAacExportFlatCache(result)
         return result
+    }
+
+    /**
+     * Danh sách câu phẳng sau lần [parseStoredTextToParagraphGroups] gần nhất — dùng cho export AAC
+     * (cùng ranh giới câu với TTS). Bản sao từ cache; `null` nếu chưa từng parse trong phiên này.
+     */
+    fun lastCachedFlatSentencesForAacExport(): List<String>? {
+        synchronized(parseStoredTextCacheLock) {
+            return aacExportCacheFlatSentences?.toList()
+        }
     }
 
     /** Danh sách phẳng (mọi câu theo thứ tự đọc / TTS). */

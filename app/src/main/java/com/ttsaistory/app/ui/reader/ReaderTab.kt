@@ -127,7 +127,6 @@ import com.ttsaistory.app.export.TtsAudioExportForegroundService
 import com.ttsaistory.app.export.TtsExportUiCoordinator
 import com.ttsaistory.app.domain.flatIndexFromMainSub
 import com.ttsaistory.app.domain.flatIndexToMainSub
-import com.ttsaistory.app.domain.hasExportableText
 import com.ttsaistory.app.domain.hasSpeakableParagraphFrom
 import com.ttsaistory.app.domain.mergeMainParagraphGroups
 import com.ttsaistory.app.domain.mergeParagraphs
@@ -709,15 +708,18 @@ fun ReaderTab(
             ExportM4aTopBarState(
                 onClick = {
                     if (paragraphSplitMode) flushParagraphParentPersist()
-                    val exportBody =
+                    val bodyForExport =
                         if (paragraphSplitMode) mergedParagraphFields() else text
+                    ParagraphTextService.parseStoredTextToParagraphGroups(bodyForExport)
+                    val exportBody =
+                        ParagraphTextService.lastCachedFlatSentencesForAacExport()
+                            ?.joinToString("\n")
+                            ?: bodyForExport
                     enqueueTtsExport(exportBody)
                 },
                 enabled =
                     exportUiFromCoordinator == null &&
-                        hasExportableText(
-                            if (paragraphSplitMode) mergedParagraphFields() else text,
-                        ),
+                        (paragraphToolbarTtsTotal ?: 0) > 0,
             ),
         )
     }
