@@ -63,6 +63,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -130,6 +131,7 @@ import com.ttsaistory.app.domain.hasExportableText
 import com.ttsaistory.app.domain.hasSpeakableParagraphFrom
 import com.ttsaistory.app.domain.mergeMainParagraphGroups
 import com.ttsaistory.app.domain.mergeParagraphs
+import com.ttsaistory.app.domain.ParagraphTextService
 import com.ttsaistory.app.domain.paragraphIndexAtTextOffset
 import com.ttsaistory.app.domain.paragraphMainGroupsForEditor
 import com.ttsaistory.app.domain.paragraphsForEditor
@@ -225,7 +227,8 @@ fun ReaderTab(
         mutableStateOf(emptyList<ReaderParagraphViewPageCell>())
     }
     var playToolbarParagraphsDebounced by remember { mutableStateOf(emptyList<String>()) }
-    var toolbarTtsSpeakableCount by remember { mutableStateOf<Int?>(null) }
+    /** Đồng bộ với [ParagraphTextService.totalItemCount] (cập nhật trong [splitIntoParagraphs] / parse). */
+    val paragraphToolbarTtsTotal by ParagraphTextService.totalItemCount.collectAsState(initial = null)
     var toolbarTtsSplitWorking by remember { mutableStateOf(false) }
     var prevParagraphSplitMode by remember { mutableStateOf<Boolean?>(null) }
     val didScrollToSavedBookmark =
@@ -480,7 +483,7 @@ fun ReaderTab(
                 .collectLatest { snap ->
                     if (snap.isEmpty()) {
                         playToolbarParagraphsDebounced = emptyList()
-                        toolbarTtsSpeakableCount = 0
+                        withContext(Dispatchers.Default) { splitIntoParagraphs("") }
                         toolbarTtsSplitWorking = false
                         return@collectLatest
                     }
@@ -496,8 +499,6 @@ fun ReaderTab(
                             return@collectLatest
                         }
                         playToolbarParagraphsDebounced = paras
-                        toolbarTtsSpeakableCount =
-                            paras.count { sanitizeParagraphText(it).isNotEmpty() }
                         AnrDiagLog.end(
                             "ReaderTab splitIntoParagraphs(fullTextToolbar) n=${paras.size}",
                             t0,
@@ -520,12 +521,9 @@ fun ReaderTab(
                 if (!paragraphSplitMode) return@collectLatest
                 if (merged.isEmpty()) {
                     playToolbarParagraphsDebounced = emptyList()
-                    toolbarTtsSpeakableCount =
-                        if (latestParentText.isNotEmpty()) {
-                            null
-                        } else {
-                            0
-                        }
+                    if (latestParentText.isEmpty()) {
+                        withContext(Dispatchers.Default) { splitIntoParagraphs("") }
+                    }
                     toolbarTtsSplitWorking = false
                     return@collectLatest
                 }
@@ -553,8 +551,6 @@ fun ReaderTab(
                         return@collectLatest
                     }
                     playToolbarParagraphsDebounced = paras
-                    toolbarTtsSpeakableCount =
-                        paras.count { sanitizeParagraphText(it).isNotEmpty() }
                     AnrDiagLog.end(
                         "ReaderTab splitIntoParagraphs(mergedToolbar) n=${paras.size}",
                         t0,
@@ -870,7 +866,7 @@ fun ReaderTab(
                 flatItemCount,
                 focusedParagraphIndex,
                 cellStructureFingerprint,
-                toolbarTtsSpeakableCount?.toString() ?: "n",
+                paragraphToolbarTtsTotal?.toString() ?: "n",
                 toolbarTtsSplitWorking,
                 playToolbarParagraphsDebounced.size,
                 webPrefetchChapterQueueLines.size,
@@ -1089,7 +1085,7 @@ fun ReaderTab(
                 },
                 goTopOrCaretStart = { goTopOrCaretStartAction() },
                 goBottomOrCaretEnd = { goBottomOrCaretEndAction() },
-                ttsSpeakableSentenceTotal = toolbarTtsSpeakableCount,
+                ttsSpeakableSentenceTotal = paragraphToolbarTtsTotal,
                 ttsSentenceSplitWorking = toolbarTtsSplitWorking,
                 webPrefetchChapterQueueLines = webPrefetchChapterQueueLines,
                 libraryWebStoryActive = activeStoryHasWebUrl,
@@ -1170,7 +1166,6 @@ fun ReaderTab(
         if (librarySyncEpoch <= 0) return@LaunchedEffect
         toolbarTtsSplitWorking = false
         if (!paragraphSplitMode) {
-            toolbarTtsSpeakableCount = null
             return@LaunchedEffect
         }
         toolbarTtsSplitWorking = true
@@ -1204,21 +1199,38 @@ fun ReaderTab(
                 withContext(Dispatchers.Default) { mergeMainParagraphGroups(segs) }
             if (mergedFromLib.isEmpty()) {
                 playToolbarParagraphsDebounced = emptyList()
-                toolbarTtsSpeakableCount =
-                    if (text.isNotEmpty()) {
-                        null
-                    } else {
-                        0
-                    }
+                if (text.isEmpty()) {
+                    withContext(Dispatchers.Default) { splitIntoParagraphs("") }
+                }
             } else {
                 val paras =
                     withContext(Dispatchers.Default) { splitIntoParagraphs(mergedFromLib) }
                 playToolbarParagraphsDebounced = paras
-                toolbarTtsSpeakableCount =
-                    paras.count { sanitizeParagraphText(it).isNotEmpty() }
             }
         } finally {
             toolbarTtsSplitWorking = false
+        }
+        val savedParagraph =
+            if (prefs.lastReadingBookmarkAppliesToStory(activeLibraryStoryId)) {
+                prefs.getInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
+            } else {
+                -1
+            }
+        val newCellCount = segs.sumOf { it.size }
+        if (savedParagraph < 0 && newCellCount > 0) {
+            paragraphSplitPageIndex = 0
+            focusedParagraphIndex = 0
+            pendingFocusFlatIndex = 0
+            paragraphFocusRequestToken++
+            scope.launch {
+                delay(1)
+                try {
+                    listState.scrollToItem(0)
+                } catch (_: IllegalArgumentException) {
+                } catch (e: CancellationException) {
+                    throw e
+                }
+            }
         }
     }
 
@@ -1265,18 +1277,13 @@ fun ReaderTab(
                         withContext(Dispatchers.Default) { mergeMainParagraphGroups(rows) }
                     if (mergedR.isEmpty()) {
                         playToolbarParagraphsDebounced = emptyList()
-                        toolbarTtsSpeakableCount =
-                            if (latestParentText.isNotEmpty()) {
-                                null
-                            } else {
-                                0
-                            }
+                        if (latestParentText.isEmpty()) {
+                            withContext(Dispatchers.Default) { splitIntoParagraphs("") }
+                        }
                     } else {
                         val paras =
                             withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
                         playToolbarParagraphsDebounced = paras
-                        toolbarTtsSpeakableCount =
-                            paras.count { sanitizeParagraphText(it).isNotEmpty() }
                     }
                 } finally {
                     toolbarTtsSplitWorking = false
@@ -1308,18 +1315,13 @@ fun ReaderTab(
                         withContext(Dispatchers.Default) { mergeMainParagraphGroups(rows) }
                     if (mergedR.isEmpty()) {
                         playToolbarParagraphsDebounced = emptyList()
-                        toolbarTtsSpeakableCount =
-                            if (latestParentText.isNotEmpty()) {
-                                null
-                            } else {
-                                0
-                            }
+                        if (latestParentText.isEmpty()) {
+                            withContext(Dispatchers.Default) { splitIntoParagraphs("") }
+                        }
                     } else {
                         val paras =
                             withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
                         playToolbarParagraphsDebounced = paras
-                        toolbarTtsSpeakableCount =
-                            paras.count { sanitizeParagraphText(it).isNotEmpty() }
                     }
                 } finally {
                     toolbarTtsSplitWorking = false
@@ -1339,17 +1341,12 @@ fun ReaderTab(
             if (textEditorChromeViewOnly || !paragraphSplitMode) return@LaunchedEffect
             if (mergedR.isEmpty()) {
                 playToolbarParagraphsDebounced = emptyList()
-                toolbarTtsSpeakableCount =
-                    if (latestParentText.isNotEmpty()) {
-                        null
-                    } else {
-                        0
-                    }
+                if (latestParentText.isEmpty()) {
+                    withContext(Dispatchers.Default) { splitIntoParagraphs("") }
+                }
             } else {
                 val paras = withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
                 playToolbarParagraphsDebounced = paras
-                toolbarTtsSpeakableCount =
-                    paras.count { sanitizeParagraphText(it).isNotEmpty() }
             }
         } finally {
             toolbarTtsSplitWorking = false

@@ -28,16 +28,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.ttsaistory.app.AnrDiagLog
-import com.ttsaistory.app.domain.sanitizeParagraphText
+import com.ttsaistory.app.domain.ParagraphTextService
 import com.ttsaistory.app.model.TextTabSpeechEngine
 import kotlin.math.roundToInt
 import com.ttsaistory.app.domain.splitIntoParagraphs
@@ -57,11 +55,12 @@ fun MainBottomBar(
     textTabSpeechEngine: TextTabSpeechEngine,
     systemTtsQueuedParagraphUtterances: Int,
 ) {
-    var totalSpeakableDeferred by remember { mutableStateOf<Int?>(null) }
+    val paragraphServiceTotal by ParagraphTextService.totalItemCount.collectAsState(initial = null)
     // Không key theo [text]: tránh splitIntoParagraphs toàn văn mỗi lần gõ; chỉ khi vào tab Text
     // (lần đầu hoặc từ tab khác) hoặc đổi truyện/sync ([librarySyncEpoch], [activeLibraryStoryId]).
     // [readerBottomNavBridge?.paragraphSplitMode]: khi bật theo đoạn, [text] có thể rỗng / chưa flush
     // trong khi nội dung nằm ở ô — không gán 0; tổng câu lấy từ bridge (toolbar) sau split.
+    // Tổng từ văn bản tab Text đồng bộ qua [ParagraphTextService.totalItemCount] (parse cập nhật).
     LaunchedEffect(
         tabIndex,
         librarySyncEpoch,
@@ -69,36 +68,29 @@ fun MainBottomBar(
         readerBottomNavBridge?.paragraphSplitMode,
     ) {
         if (tabIndex != 0) return@LaunchedEffect
-        // Xóa tổng cũ ngay khi đổi truyện / tab / chế độ — tránh một vài frame vẫn dùng mẫu số
-        // của file trước trong khi bookmark prefs đã là file mới → coerce / % sai khi mở từ thư viện.
-        totalSpeakableDeferred = null
         if (text.isEmpty()) {
             if (readerBottomNavBridge?.paragraphSplitMode == true) {
-                totalSpeakableDeferred = null
                 AnrDiagLog.i(
                     "MainBottomBar speakableCount text empty paragraph mode -> defer toolbar",
                 )
             } else {
-                totalSpeakableDeferred = 0
-                AnrDiagLog.i("MainBottomBar speakableCount text empty -> 0")
+                val t0 =
+                    AnrDiagLog.begin(
+                        "MainBottomBar splitIntoParagraphs(empty) tab=$tabIndex epoch=$librarySyncEpoch sid=$activeLibraryStoryId",
+                    )
+                withContext(Dispatchers.Default) { splitIntoParagraphs("") }
+                AnrDiagLog.end("MainBottomBar splitIntoParagraphs(empty) -> service total", t0)
             }
             return@LaunchedEffect
         }
         val snap = text
         val t0 =
             AnrDiagLog.begin(
-                "MainBottomBar splitIntoParagraphs+count len=${snap.length} tab=$tabIndex epoch=$librarySyncEpoch sid=$activeLibraryStoryId",
+                "MainBottomBar splitIntoParagraphs len=${snap.length} tab=$tabIndex epoch=$librarySyncEpoch sid=$activeLibraryStoryId",
             )
-        val n =
-            withContext(Dispatchers.Default) {
-                splitIntoParagraphs(snap).count { sanitizeParagraphText(it).isNotEmpty() }
-            }
+        withContext(Dispatchers.Default) { splitIntoParagraphs(snap) }
         if (snap == text) {
-            totalSpeakableDeferred = n
-            AnrDiagLog.end(
-                "MainBottomBar splitIntoParagraphs+count -> n=$n",
-                t0,
-            )
+            AnrDiagLog.end("MainBottomBar splitIntoParagraphs (ParagraphTextService total updated)", t0)
         } else {
             AnrDiagLog.i("MainBottomBar speakableCount dropped (text changed mid-job)")
         }
@@ -106,19 +98,26 @@ fun MainBottomBar(
     val navBridge = readerBottomNavBridge
     val toolbarSpeakableTotal = if (tabIndex == 0) navBridge?.ttsSpeakableSentenceTotal else null
     val toolbarWorking = tabIndex == 0 && navBridge?.ttsSentenceSplitWorking == true
+    val paragraphSplit = tabIndex == 0 && navBridge?.paragraphSplitMode == true
+    // Sau khi chọn truyện mới, bridge có thể vài frame vẫn giữ [ttsSpeakableSentenceTotal] của file
+    // cũ; [ParagraphTextService.totalItemCount] cập nhật ngay sau parse [text] trong LaunchedEffect.
+    // Chỉ khi tách đoạn + [text] rỗng (nội dung nằm ở ô) mới ưu tiên tổng từ toolbar.
     val totalSpeakable =
         when {
-            tabIndex != 0 -> totalSpeakableDeferred ?: 0
+            tabIndex != 0 -> 0
+            paragraphSplit && text.isEmpty() ->
+                toolbarSpeakableTotal ?: (paragraphServiceTotal ?: 0)
+            paragraphServiceTotal != null -> paragraphServiceTotal!!
             toolbarSpeakableTotal != null -> toolbarSpeakableTotal
-            else -> totalSpeakableDeferred ?: 0
+            else -> 0
         }
-    // Chỉ "đang tính" khi chưa có cả tổng từ [text] (deferred) lẫn từ toolbar; không kẹt vì theo đoạn
-    // trong khi deferred đã có — tổng hiển thị vẫn ưu tiên toolbar khi có ([totalSpeakable] phía trên).
+    // Chỉ "đang tính" khi chưa có cả tổng từ service lẫn từ toolbar; không kẹt vì theo đoạn
+    // trong khi service đã có — khi [text] không rỗng, tổng từ parse ([paragraphServiceTotal]) đi trước.
     val progressStillLoading =
         tabIndex == 0 &&
                 !toolbarWorking &&
                 toolbarSpeakableTotal == null &&
-                totalSpeakableDeferred == null
+                paragraphServiceTotal == null
     SideEffect {
         if (tabIndex == 0) {
             ReaderReadingProgress.totalSpeakableSentenceCount.intValue = totalSpeakable

@@ -78,8 +78,8 @@ data class ReaderBottomNavBridge(
     val goTopOrCaretStart: () -> Unit,
     val goBottomOrCaretEnd: () -> Unit,
     /**
-     * Tổng số câu TTS (sau [sanitizeParagraphText], bỏ rỗng) khớp [splitIntoParagraphs] trên nguồn
-     * thanh công cụ Phát; null nếu chưa có kết quả sau lần tách gần nhất.
+     * Tổng số câu TTS — snapshot [ParagraphTextService.totalItemCount] (cập nhật khi parse / [splitIntoParagraphs]);
+     * null khi chưa có tổng (ví dụ đang defer theo ô / merge).
      */
     val ttsSpeakableSentenceTotal: Int? = null,
     /** Đang chạy [splitIntoParagraphs] trên luồng nền — bottom bar có thể hiện dialog tiến trình. */

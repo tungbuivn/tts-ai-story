@@ -103,7 +103,6 @@ fun AppModalNavigationDrawerScaffold(
     onRegisterReaderBottomNav: ((ReaderBottomNavBridge?) -> Unit)?,
     systemTtsSpeechRate: Float,
     systemTtsPitch: Float,
-    onPlayCategoryFromLibrary: (Long) -> Unit,
     onOpenStoryFromLibrary: (Long) -> Unit,
     /** Mở file văn bản qua SAF (bộ nhớ / thẻ SD). */
     onOpenTextFileFromStorage: () -> Unit,
@@ -405,7 +404,6 @@ fun AppModalNavigationDrawerScaffold(
                                 onToolbarCommandConsumed = onLibraryToolbarCommandConsumed,
                                 activeEditingStoryId = activeLibraryStoryId,
                                 onLibraryChanged = onLibraryChanged,
-                                onPlayCategory = onPlayCategoryFromLibrary,
                                 onOpenStory = onOpenStoryFromLibrary,
                                 postLibraryFolderImportProgress = postLibraryFolderImportProgress,
                             )

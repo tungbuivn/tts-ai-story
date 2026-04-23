@@ -100,7 +100,7 @@ object OnlineCategoryHeadlessStoryTextSync {
                     wv.settings.userAgentString + " TtsAiStoryWebCategory/1"
                 wv.webChromeClient = WebChromeClient()
 
-                withTimeout(60_000L) {
+                withTimeout<Unit>(timeMillis = 60_000L) {
                     suspendCancellableCoroutine { cont ->
                         val done = AtomicBoolean(false)
                         fun finishOk() {

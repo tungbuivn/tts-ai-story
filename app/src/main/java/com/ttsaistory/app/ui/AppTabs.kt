@@ -1136,49 +1136,6 @@ fun AppTabs() {
     val systemTtsPlaybackActive =
         systemTtsUtteranceDepth > 0 || systemTtsStoryUtterancesRemaining > 0
 
-    fun playMergedCategoryFromLibrary(categoryId: Long) {
-        coroutineScope.launch {
-            val merged =
-                withContext(Dispatchers.IO) {
-                    storyLibrary.mergeCategoryStoriesText(categoryId)
-                }
-            if (sanitizeParagraphText(merged).isEmpty()) {
-                Toast.makeText(
-                    context,
-                    "Thể loại trống.",
-                    Toast.LENGTH_SHORT,
-                ).show()
-                return@launch
-            }
-            withContext(Dispatchers.Main) {
-                ParagraphSpeechEngines.stopAll(
-                    systemParagraphSpeechEngine,
-                    elevenParagraphSpeechEngine,
-                )
-                systemTtsStoryUtterancesRemaining = 0
-                elevenLabsPlayJob = null
-                val cleaned = canonicalTextFromRaw(merged)
-                text = cleaned
-                prefs.saveLastText(cleaned)
-                prefs.clearLastReadingBookmark()
-                activeLibraryStoryId = null
-                tabIndex = 0
-                val paras = splitIntoParagraphs(cleaned)
-                systemParagraphSpeechEngine.startParagraphSequence(
-                    paras,
-                    0,
-                    ParagraphSpeechSequenceCallbacks(
-                        onSpeakingParagraphIndex = {},
-                        onErrorToast = { msg ->
-                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                        },
-                        onSystemQueuedUtteranceCount = { systemTtsStoryUtterancesRemaining = it },
-                    ),
-                )
-            }
-        }
-    }
-
     // --- Scaffold + hộp thoại font / cài đặt giọng ---
     Box(modifier = Modifier.fillMaxSize()) {
         AppModalNavigationDrawerScaffold(
@@ -1291,7 +1248,6 @@ fun AppTabs() {
             },
             systemTtsSpeechRate = systemTtsSpeechRate,
             systemTtsPitch = systemTtsPitch,
-            onPlayCategoryFromLibrary = ::playMergedCategoryFromLibrary,
             onOpenStoryFromLibrary = { storyId ->
                 coroutineScope.launch {
                     stopAllSpeechReading()

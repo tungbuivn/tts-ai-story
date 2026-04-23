@@ -9,7 +9,8 @@ import androidx.compose.runtime.mutableIntStateOf
  * subscribe snapshot và recompose khi giá trị đổi (cập nhật từ prefs listener, bottom bar, v.v.).
  *
  * Tiến trình tách câu cho thanh công cụ / dialog "Đang tách câu" **không** dùng object này;
- * nó đi qua [ReaderBottomNavBridge.ttsSentenceSplitWorking] và [ttsSpeakableSentenceTotal].
+ * nó đi qua [ReaderBottomNavBridge.ttsSentenceSplitWorking] và [ReaderBottomNavBridge.ttsSpeakableSentenceTotal]
+ * (đồng bộ [com.ttsaistory.app.domain.ParagraphTextService.totalItemCount]).
  */
 object ReaderReadingProgress {
     /** Tổng số câu TTS (sau tách câu, đếm ô có nội dung) — bottom bar đồng bộ sau mỗi lần tính. */

@@ -19,11 +19,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -59,7 +57,6 @@ fun LibraryTab(
     /** Truyện đang được mở/chỉnh sửa ở tab Text (null nếu không gắn file thư viện). */
     activeEditingStoryId: Long? = null,
     onOpenStory: (Long) -> Unit,
-    onPlayCategory: (Long) -> Unit,
     onLibraryChanged: () -> Unit,
     postLibraryFolderImportProgress: (OpenFileProgressUi?) -> Unit,
 ) {
@@ -353,15 +350,6 @@ fun LibraryTab(
                                     "${cat.storyCount} truyện",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            IconButton(
-                                onClick = { onPlayCategory(cat.id) },
-                                enabled = cat.storyCount > 0,
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.PlaylistPlay,
-                                    contentDescription = "Phát cả thể loại",
                                 )
                             }
                             LibraryCategoryOverflowMenu(

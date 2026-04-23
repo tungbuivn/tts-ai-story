@@ -2,6 +2,9 @@ package com.ttsaistory.app.domain
 
 import java.lang.Character
 import kotlin.text.CharCategory
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Tách/ghép văn bản theo **đoạn** (một dòng = một đoạn, cách nhau bằng `\n`) và **câu** (dấu chấm đơn
@@ -14,11 +17,123 @@ import kotlin.text.CharCategory
 object ParagraphTextService {
 
     /**
+     * Tổng số **câu** (ô phẳng sau parse, bỏ rỗng sau [sanitizeParagraphText]) — cập nhật trong
+     * [parseStoredTextToParagraphGroups]. `null` = chưa có lần parse gần đây cho ngữ cảnh hiện tại
+     * (ví dụ vừa đổi truyện, bottom bar có thể coi là đang tính).
+     */
+    private val _totalItemCount = MutableStateFlow<Int?>(null)
+    val totalItemCount: StateFlow<Int?> = _totalItemCount.asStateFlow()
+
+    /** Khóa cho cache [parseStoredTextToParagraphGroups] (gọi từ UI + luồng nền). */
+    private val parseStoredTextCacheLock = Any()
+    private var parseStoredTextCacheRaw: String? = null
+    private var parseStoredTextCacheResult: List<List<String>>? = null
+
+    private fun publishTotalItemCountFromGroups(groups: List<List<String>>) {
+        val n =
+            groups.sumOf { row ->
+                row.count { sanitizeParagraphText(it).isNotEmpty() }
+            }
+        _totalItemCount.value = n
+    }
+
+    /**
      * Chấm đơn không thuộc `..` / `...`; sau chấm là chữ Unicode, khoảng trắng hoặc hết chuỗi
      * (hỗ trợ `qua.Cuốn` không có dấu cách sau chấm).
+     * Chấm sau chữ số + ký tự tiếp theo (bullet / thập phân), sau từ viết tắt danh xưng / tháng,
+     * hoặc chữ cái đơn kiểu tên đệm (`J. Smith`) bị loại ở [dotIsSingleSentenceBoundary].
      */
     private val singleSentenceEndDot =
         Regex("""(?<![.])\.(?![.])(?=\p{L}|\s|$)""")
+
+    /** Từ chữ cái ngay trước `.` (không kéo qua ký tự không phải chữ). */
+    private fun lettersTokenEndingAt(s: String, lastLetterIndex: Int): String {
+        if (lastLetterIndex !in s.indices || !s[lastLetterIndex].isLetter()) return ""
+        var j = lastLetterIndex
+        while (j >= 0 && s[j].isLetter()) j--
+        return s.substring(j + 1, lastLetterIndex + 1)
+    }
+
+    private val honorificLikeTokensLowercase =
+        setOf(
+            "dr",
+            "mr",
+            "mrs",
+            "ms",
+            "prof",
+            "sr",
+            "jr",
+            "st",
+            "vs",
+            "etc",
+            "inc",
+            "ltd",
+            "corp",
+            "co",
+            "jan",
+            "feb",
+            "mar",
+            "apr",
+            "jun",
+            "jul",
+            "aug",
+            "sep",
+            "sept",
+            "oct",
+            "nov",
+            "dec",
+            "mme",
+            "mlle",
+            "mgr",
+            "hon",
+            "rev",
+            "gen",
+            "col",
+            "capt",
+            "lt",
+            "sgt",
+            "maj",
+            "rep",
+            "sen",
+            "gov",
+            "atty",
+            "md",
+            "mba",
+            "ba",
+            "ma",
+            "bs",
+            "jd",
+            "rn",
+            "phd",
+            "dds",
+        )
+
+    /**
+     * `Dr.`, `Mr.`, `Prof.`, … hoặc chữ cái Latin **một chữ** viết hoa (tên đệm `J.`, `T.`) khi
+     * trước đó là ranh giới từ và sau `.` là khoảng trắng rồi chữ hoa / hết chuỗi — không ranh giới câu.
+     */
+    private fun dotIsHonorificOrSingleInitialAbbreviation(s: String, dotIndex: Int): Boolean {
+        if (dotIndex <= 0 || dotIndex >= s.length || s[dotIndex] != '.') return false
+        val lastLetter = dotIndex - 1
+        if (!s[lastLetter].isLetter()) return false
+        val token = lettersTokenEndingAt(s, lastLetter)
+        if (token.isNotEmpty() && token.lowercase() in honorificLikeTokensLowercase) return true
+        if (token.length != 1) return false
+        val only = token[0]
+        if (!only.isUpperCase() || !only.isLetter()) return false
+        if (lastLetter > 0 && s[lastLetter - 1].isLetter()) return false
+        val prev = if (lastLetter > 0) s[lastLetter - 1] else '\u0000'
+        val boundaryOk =
+            lastLetter == 0 ||
+                prev.isWhitespace() ||
+                prev in "([{`'\"«—–-"
+        if (!boundaryOk) return false
+        var k = dotIndex + 1
+        while (k < s.length && s[k].isWhitespace()) k++
+        if (k >= s.length) return true
+        val after = s[k]
+        return after.isLetter() && after.isUpperCase()
+    }
 
     /** `*`, `_`, `+`, `-` (markdown / gạch): gộp lặp, bỏ khoảng trắng kề dấu, dòng chỉ một dấu → rỗng. */
     private val markdownLikeMarkerChars = setOf('*', '_', '+', '-')
@@ -132,10 +247,24 @@ object ParagraphTextService {
     }
 
     /**
+     * `chữ số` ngay trước `.`, sau `.` có thể có khoảng trắng, rồi còn ít nhất một ký tự — bullet đánh số
+     * (`1. Mục`, `2.Tiêu đề`) hoặc số thập phân (`12.34`): **không** ranh giới câu, giữ nguyên khi tách/normalize.
+     */
+    private fun dotIsDigitLeadingBulletOrDecimalDot(s: String, dotIndex: Int): Boolean {
+        if (dotIndex <= 0 || dotIndex >= s.length || s[dotIndex] != '.') return false
+        if (!s[dotIndex - 1].isDigit()) return false
+        var j = dotIndex + 1
+        while (j < s.length && s[j].isWhitespace()) j++
+        return j < s.length
+    }
+
+    /**
      * Dấu `.` tại [dotIndex] có phải chấm đơn ranh giới câu (cùng quy tắc [singleSentenceEndDot], không `..`/`...`).
      */
     private fun dotIsSingleSentenceBoundary(s: String, dotIndex: Int): Boolean {
         if (dotIndex !in s.indices || s[dotIndex] != '.') return false
+        if (dotIsDigitLeadingBulletOrDecimalDot(s, dotIndex)) return false
+        if (dotIsHonorificOrSingleInitialAbbreviation(s, dotIndex)) return false
         val m = singleSentenceEndDot.find(s, dotIndex) ?: return false
         return m.range.first == dotIndex
     }
@@ -261,6 +390,11 @@ object ParagraphTextService {
         var start = 0
         var m = singleSentenceEndDot.find(s, start)
         while (m != null) {
+            val dotStart = m.range.first
+            if (!dotIsSingleSentenceBoundary(s, dotStart)) {
+                m = singleSentenceEndDot.find(s, dotStart + 1)
+                continue
+            }
             val dotEnd = m.range.last
             val piece = s.substring(start, dotEnd + 1).trim()
             if (piece.isNotEmpty()) out.add(piece)
@@ -337,25 +471,53 @@ object ParagraphTextService {
     /**
      * Parse chuỗi đã lưu → `List<đoạn<List<câu>>>`.
      * Mỗi dòng (phân tách bằng `\n`) là một đoạn; dòng rỗng bỏ qua. Trong mỗi dòng tách câu theo `|` và chấm đơn.
+     *
+     * Kết quả được cache theo tham số [raw] (so sánh nội dung `==`); gọi lại với cùng chuỗi trả về
+     * cùng tham chiếu danh sách đã parse — không sửa đổi từ bên ngoài.
      */
     fun parseStoredTextToParagraphGroups(raw: String): List<List<String>> {
-        if (raw.isEmpty()) return listOf(listOf(""))
-        val body = raw.trimEnd('\r', '\n')
-        if (body.isEmpty()) return listOf(listOf(""))
-        return body
-            .split('\n')
-            .map { sanitizeParagraphText(it.replace("\r", "")) }
-            .mapNotNull { line ->
-                if (line.isEmpty()) null
-                else {
-                    val sents =
-                        splitParagraphIntoSentences(line).map(::sanitizeParagraphText).filter {
-                            it.isNotEmpty()
-                        }
-                    if (sents.isEmpty()) listOf(line) else sents
-                }
+        synchronized(parseStoredTextCacheLock) {
+            val cachedRaw = parseStoredTextCacheRaw
+            val cached = parseStoredTextCacheResult
+            if (cachedRaw != null && cached != null && cachedRaw == raw) {
+                return cached
             }
-            .ifEmpty { listOf(listOf("")) }
+            val result = parseStoredTextToParagraphGroupsUncached(raw)
+            parseStoredTextCacheRaw = raw
+            parseStoredTextCacheResult = result
+            return result
+        }
+    }
+
+    private fun parseStoredTextToParagraphGroupsUncached(raw: String): List<List<String>> {
+        if (raw.isEmpty()) {
+            val empty = listOf(listOf(""))
+            publishTotalItemCountFromGroups(empty)
+            return empty
+        }
+        val body = raw.trimEnd('\r', '\n')
+        if (body.isEmpty()) {
+            val empty = listOf(listOf(""))
+            publishTotalItemCountFromGroups(empty)
+            return empty
+        }
+        val result =
+            body
+                .split('\n')
+                .map { sanitizeParagraphText(it.replace("\r", "")) }
+                .mapNotNull { line ->
+                    if (line.isEmpty()) null
+                    else {
+                        val sents =
+                            splitParagraphIntoSentences(line).map(::sanitizeParagraphText).filter {
+                                it.isNotEmpty()
+                            }
+                        if (sents.isEmpty()) listOf(line) else sents
+                    }
+                }
+                .ifEmpty { listOf(listOf("")) }
+        publishTotalItemCountFromGroups(result)
+        return result
     }
 
     /** Danh sách phẳng (mọi câu theo thứ tự đọc / TTS). */
