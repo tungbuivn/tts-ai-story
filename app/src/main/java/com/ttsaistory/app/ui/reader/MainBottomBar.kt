@@ -1,5 +1,6 @@
 package com.ttsaistory.app.ui.reader
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,9 +14,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.LastPage
+import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FirstPage
+import androidx.compose.material.icons.filled.HorizontalSplit
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material.icons.filled.VerticalAlignTop
@@ -244,6 +248,41 @@ fun MainBottomBar(
                                 Icon(
                                     imageVector = Icons.Filled.Add,
                                     contentDescription = "Ô sau",
+                                )
+                            }
+                        }
+                    } else if (nav != null && nav.showParagraphSplitEditBar) {
+                        Row(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
+                                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                        ) {
+                            IconButton(
+                                onClick = { nav.onParagraphSplitEditJoinUp() },
+                                enabled = nav.paragraphSplitEditJoinUpEnabled,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.MergeType,
+                                    contentDescription = "Nối với câu trước",
+                                )
+                            }
+                            IconButton(onClick = { nav.onParagraphSplitEditSplitAtCaret() }) {
+                                Icon(
+                                    imageVector = Icons.Filled.HorizontalSplit,
+                                    contentDescription = "Tách đoạn tại con trỏ",
+                                )
+                            }
+                            IconButton(
+                                onClick = { nav.onParagraphSplitEditDelete() },
+                                enabled = nav.paragraphSplitEditDeleteEnabled,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Delete,
+                                    contentDescription = "Xóa nội dung câu",
                                 )
                             }
                         }

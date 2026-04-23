@@ -46,10 +46,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.HorizontalSplit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -300,6 +297,8 @@ fun ReaderTab(
     var libraryStoryPickerCategoryTitle by remember { mutableStateOf("") }
     var libraryStoryPickerStories by remember { mutableStateOf<List<LibraryStoryRow>>(emptyList()) }
     var libraryStoryPickerCategoryId by remember { mutableStateOf<Long?>(null) }
+    /** Fallback khi [activeLibraryStoryId] còn trỏ tới truyện đã xóa (vd. vừa ghép) — tránh rơi vào thể loại đầu tiên ngẫu nhiên. */
+    var lastLibraryStoryPickerCategoryId by remember { mutableStateOf<Long?>(null) }
     val libraryStoryPickerLoadJob = remember { mutableStateOf<Job?>(null) }
     var moveStoryTitleDraft by remember { mutableStateOf("") }
     var textEditorChromeViewOnly by rememberSaveable { mutableStateOf(true) }
@@ -309,6 +308,15 @@ fun ReaderTab(
 
     LaunchedEffect(activeLibraryStoryId) {
         webStoryQueueTargetStoryId = null
+    }
+
+    LaunchedEffect(activeLibraryStoryId, librarySyncEpoch) {
+        val sid = activeLibraryStoryId ?: return@LaunchedEffect
+        val cid =
+            withContext(Dispatchers.IO) {
+                libraryRepository.getStory(sid)?.categoryId
+            } ?: return@LaunchedEffect
+        lastLibraryStoryPickerCategoryId = cid
     }
 
     LaunchedEffect(moveCategoryTarget?.id) {
@@ -375,11 +383,12 @@ fun ReaderTab(
         libraryStoryPickerCategoryTitle = ""
         libraryStoryPickerLoadJob.value =
             scope.launch {
+                val sidSnapshot = activeLibraryStoryId
+                val lastCatSnapshot = lastLibraryStoryPickerCategoryId
                 val triple =
                     withContext(Dispatchers.IO) {
-                        val sid = activeLibraryStoryId
-                        if (sid != null) {
-                            val row = libraryRepository.getStory(sid)
+                        if (sidSnapshot != null) {
+                            val row = libraryRepository.getStory(sidSnapshot)
                             if (row != null) {
                                 val cats = libraryRepository.listCategories()
                                 val cat = cats.find { it.id == row.categoryId }
@@ -390,6 +399,18 @@ fun ReaderTab(
                                         libraryRepository.listStories(row.categoryId),
                                     )
                                 }
+                            }
+                        }
+                        val lc = lastCatSnapshot
+                        if (lc != null) {
+                            val cats = libraryRepository.listCategories()
+                            val cat = cats.find { it.id == lc }
+                            if (cat != null) {
+                                return@withContext Triple(
+                                    lc,
+                                    cat.name,
+                                    libraryRepository.listStories(lc),
+                                )
                             }
                         }
                         val cats = libraryRepository.listCategories()
@@ -413,6 +434,7 @@ fun ReaderTab(
                         return@withContext
                     }
                     val (cid, cname, stories) = triple
+                    lastLibraryStoryPickerCategoryId = cid
                     libraryStoryPickerCategoryTitle = cname
                     libraryStoryPickerCategoryId = cid
                     libraryStoryPickerStories = stories
@@ -438,6 +460,7 @@ fun ReaderTab(
     val latestParagraphFieldGroups by rememberUpdatedState(paragraphGroupFieldValues)
     val latestOnTextChange by rememberUpdatedState(onTextChange)
     val latestParentText by rememberUpdatedState(text)
+    val paragraphSplitEditSink = remember { ReaderParagraphSplitEditActionSink() }
     LaunchedEffect(paragraphSplitMode, textEditorChromeViewOnly) {
         if (!paragraphSplitMode) {
             snapshotFlow { text }
@@ -904,6 +927,19 @@ fun ReaderTab(
     SideEffect {
         val cellStructureFingerprint =
             paragraphGroupFieldValues.joinToString(",") { it.size.toString() }
+        val splitEditFocusFingerprint =
+            if (
+                paragraphSplitMode &&
+                !textEditorChromeViewOnly &&
+                flatItemCount > 0
+            ) {
+                val fi = focusedParagraphIndex.coerceIn(0, flatItemCount - 1)
+                val (m, s) = flatIndexToMainSub(paragraphGroupFieldValues, fi)
+                val tf = paragraphGroupFieldValues.getOrNull(m)?.getOrNull(s)
+                "${fi}|${tf?.text?.length ?: 0}"
+            } else {
+                ""
+            }
         val bottomNavPublishKey =
             listOf(
                 paragraphSplitMode,
@@ -911,6 +947,7 @@ fun ReaderTab(
                 flatItemCount,
                 focusedParagraphIndex,
                 cellStructureFingerprint,
+                splitEditFocusFingerprint,
                 paragraphToolbarTtsTotal?.toString() ?: "n",
                 toolbarTtsSplitWorking,
                 playToolbarParagraphsDebounced.size,
@@ -926,7 +963,26 @@ fun ReaderTab(
             ReaderBottomNavBridge(
                 paragraphSplitMode = paragraphSplitMode,
                 showPasteAndCaretStep = !textEditorChromeViewOnly,
-                showParagraphFocusSlider = paragraphSplitMode && flatItemCount > 0,
+                showParagraphFocusSlider =
+                    paragraphSplitMode && textEditorChromeViewOnly && flatItemCount > 0,
+                showParagraphSplitEditBar =
+                    paragraphSplitMode && !textEditorChromeViewOnly && flatItemCount > 0,
+                paragraphSplitEditJoinUpEnabled =
+                    paragraphSplitMode &&
+                        !textEditorChromeViewOnly &&
+                        flatItemCount > 0 &&
+                        focusedParagraphIndex > 0,
+                paragraphSplitEditDeleteEnabled =
+                    if (paragraphSplitMode && !textEditorChromeViewOnly && flatItemCount > 0) {
+                        val fi = focusedParagraphIndex.coerceIn(0, flatItemCount - 1)
+                        val (m, s) = flatIndexToMainSub(paragraphGroupFieldValues, fi)
+                        paragraphGroupFieldValues.getOrNull(m)?.getOrNull(s)?.text?.isNotEmpty() == true
+                    } else {
+                        false
+                    },
+                onParagraphSplitEditJoinUp = { paragraphSplitEditSink.joinUp() },
+                onParagraphSplitEditSplitAtCaret = { paragraphSplitEditSink.splitAtCaret() },
+                onParagraphSplitEditDelete = { paragraphSplitEditSink.deleteCell() },
                 paragraphFocusSliderMax = (flatItemCount - 1).coerceAtLeast(0),
                 paragraphFocusSliderValue =
                     focusedParagraphIndex.coerceIn(0, (flatItemCount - 1).coerceAtLeast(0)),
@@ -1997,6 +2053,36 @@ fun ReaderTab(
                 paragraphFocusRequestToken++
                 scheduleDebouncedParagraphParentPersist()
             }
+            SideEffect {
+                paragraphSplitEditSink.joinUp = {
+                    keyboardController?.hide()
+                    val flat = focusedParagraphIndex
+                    if (flat > 0 &&
+                        !mergeParagraphBackward(flat, requireCaretAtStart = false)
+                    ) {
+                        Toast.makeText(
+                            ctx,
+                            "Không thể nối với câu trước.",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
+                paragraphSplitEditSink.splitAtCaret = {
+                    keyboardController?.hide()
+                    val flat = focusedParagraphIndex
+                    if (!splitParagraphAtCaretForToolbar(flat)) {
+                        Toast.makeText(
+                            ctx,
+                            "Đặt con trỏ giữa nội dung để tách thành đoạn mới (như xuống dòng).",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
+                paragraphSplitEditSink.deleteCell = {
+                    keyboardController?.hide()
+                    clearParagraphCellText(focusedParagraphIndex)
+                }
+            }
             val paragraphPageStartFlat = paragraphSplitPageIndex * paragraphSplitPageSize
             val paragraphPageEndFlat =
                 (paragraphPageStartFlat + paragraphSplitPageSize).coerceAtMost(flatItemCount)
@@ -2293,168 +2379,94 @@ fun ReaderTab(
                                     } else {
                                         MaterialTheme.colorScheme.outline
                                     }
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    verticalAlignment = Alignment.Top,
-                                ) {
-                                    if (focusedParagraphIndex == flatIdx) {
-                                        IconButton(
-                                            onClick = {
-                                                keyboardController?.hide()
-                                                clearParagraphCellText(flatIdx)
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        text = "Câu ${subIdx + 1}",
+                                        style = paragraphCellSentenceLabelStyle,
+                                        modifier = Modifier.padding(bottom = 4.dp),
+                                    )
+                                    CompositionLocalProvider(
+                                        LocalTextSelectionColors provides paragraphCellSelectionColors,
+                                    ) {
+                                        BasicTextField(
+                                            value = paraForEdit!!,
+                                            onValueChange = outVc@{ newVal ->
+                                                val old =
+                                                    paragraphGroupFieldValues
+                                                        .getOrNull(mainIdx)
+                                                        ?.getOrNull(subIdx)
+                                                        ?: return@outVc
+                                                if (flatIdx > 0 &&
+                                                    old.selection.collapsed &&
+                                                    old.selection.start == 0 &&
+                                                    old.text.isNotEmpty() &&
+                                                    newVal.text == old.text.drop(1)
+                                                ) {
+                                                    if (mergeParagraphBackward(flatIdx)) return@outVc
+                                                }
+                                                val gl =
+                                                    paragraphGroupFieldValues
+                                                        .map { it.toMutableList() }
+                                                        .toMutableList()
+                                                if (mainIdx in gl.indices && subIdx in gl[mainIdx].indices) {
+                                                    gl[mainIdx][subIdx] = newVal
+                                                    paragraphGroupFieldValues =
+                                                        compactParagraphGroupFieldValues(gl)
+                                                    clampFlatFocus()
+                                                    scheduleDebouncedParagraphParentPersist()
+                                                }
                                             },
-                                            enabled = paraForEdit!!.text.isNotEmpty(),
-                                        ) {
-                                            Icon(
-                                                Icons.Filled.Delete,
-                                                contentDescription = "Xóa nội dung câu",
-                                            )
-                                        }
-                                    }
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "Câu ${subIdx + 1}",
-                                            style = paragraphCellSentenceLabelStyle,
-                                            modifier = Modifier.padding(bottom = 4.dp),
-                                        )
-                                        CompositionLocalProvider(
-                                            LocalTextSelectionColors provides paragraphCellSelectionColors,
-                                        ) {
-                                            BasicTextField(
-                                                value = paraForEdit!!,
-                                                onValueChange = outVc@{ newVal ->
-                                                    val old =
-                                                        paragraphGroupFieldValues
-                                                            .getOrNull(mainIdx)
-                                                            ?.getOrNull(subIdx)
-                                                            ?: return@outVc
-                                                    if (flatIdx > 0 &&
-                                                        old.selection.collapsed &&
-                                                        old.selection.start == 0 &&
-                                                        old.text.isNotEmpty() &&
-                                                        newVal.text == old.text.drop(1)
-                                                    ) {
-                                                        if (mergeParagraphBackward(flatIdx)) return@outVc
-                                                    }
-                                                    val gl =
-                                                        paragraphGroupFieldValues
-                                                            .map { it.toMutableList() }
-                                                            .toMutableList()
-                                                    if (mainIdx in gl.indices && subIdx in gl[mainIdx].indices) {
-                                                        gl[mainIdx][subIdx] = newVal
-                                                        paragraphGroupFieldValues =
-                                                            compactParagraphGroupFieldValues(gl)
-                                                        clampFlatFocus()
-                                                        scheduleDebouncedParagraphParentPersist()
-                                                    }
-                                                },
-                                                modifier =
-                                                    Modifier
-                                                        .fillMaxWidth()
-                                                        .heightIn(max = 320.dp)
-                                                        .focusRequester(cellFocusRequester)
-                                                        .onFocusChanged { fs ->
-                                                            if (fs.isFocused) {
-                                                                focusedParagraphIndex = flatIdx
-                                                                persistLastReadingBookmarkFromEditorFieldFlat(
-                                                                    latestParagraphFieldGroups,
-                                                                    flatIdx,
-                                                                )
-                                                            }
-                                                        }
-                                                        .onPreviewKeyEvent { ev ->
-                                                            if (ev.type != KeyEventType.KeyDown) {
-                                                                return@onPreviewKeyEvent false
-                                                            }
-                                                            when {
-                                                                ev.key == Key.Backspace ||
-                                                                    ev.key == Key.Delete ->
-                                                                    mergeParagraphBackward(flatIdx)
-                                                                (ev.key == Key.Enter || ev.key == Key.NumPadEnter) &&
-                                                                    ev.isShiftPressed ->
-                                                                    splitParagraphForward(flatIdx)
-                                                                else -> false
-                                                            }
-                                                        },
-                                                textStyle = paragraphOutlineEditTextStyle,
-                                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                                interactionSource = cellParagraphInteractionSource,
-                                                keyboardOptions = KeyboardOptions.Default,
-                                                keyboardActions = KeyboardActions.Default,
-                                                maxLines = Int.MAX_VALUE,
-                                                minLines = 1,
-                                                decorationBox = { innerTextField ->
-                                                    Box(
-                                                        modifier =
-                                                            Modifier
-                                                                .fillMaxWidth()
-                                                                .border(
-                                                                    width = 1.dp,
-                                                                    color = cellOutlineColor,
-                                                                    shape = RoundedCornerShape(8.dp),
-                                                                )
-                                                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                                                    ) {
-                                                        innerTextField()
-                                                    }
-                                                },
-                                            )
-                                        }
-                                    }
-                                    if (focusedParagraphIndex == flatIdx) {
-                                        Column(
-                                            modifier = Modifier.padding(top = 6.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                        ) {
-                                            if (flatIdx > 0) {
-                                                IconButton(
-                                                    onClick = {
-                                                        keyboardController?.hide()
-                                                        if (!mergeParagraphBackward(
+                                            modifier =
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(max = 320.dp)
+                                                    .focusRequester(cellFocusRequester)
+                                                    .onFocusChanged { fs ->
+                                                        if (fs.isFocused) {
+                                                            focusedParagraphIndex = flatIdx
+                                                            persistLastReadingBookmarkFromEditorFieldFlat(
+                                                                latestParagraphFieldGroups,
                                                                 flatIdx,
-                                                                requireCaretAtStart = false,
                                                             )
-                                                        ) {
-                                                            Toast.makeText(
-                                                                ctx,
-                                                                "Không thể nối với câu trước.",
-                                                                Toast.LENGTH_SHORT,
-                                                            ).show()
+                                                        }
+                                                    }
+                                                    .onPreviewKeyEvent { ev ->
+                                                        if (ev.type != KeyEventType.KeyDown) {
+                                                            return@onPreviewKeyEvent false
+                                                        }
+                                                        when {
+                                                            ev.key == Key.Backspace ||
+                                                                ev.key == Key.Delete ->
+                                                                mergeParagraphBackward(flatIdx)
+                                                            (ev.key == Key.Enter || ev.key == Key.NumPadEnter) &&
+                                                                ev.isShiftPressed ->
+                                                                splitParagraphForward(flatIdx)
+                                                            else -> false
                                                         }
                                                     },
+                                            textStyle = paragraphOutlineEditTextStyle,
+                                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                            interactionSource = cellParagraphInteractionSource,
+                                            keyboardOptions = KeyboardOptions.Default,
+                                            keyboardActions = KeyboardActions.Default,
+                                            maxLines = Int.MAX_VALUE,
+                                            minLines = 1,
+                                            decorationBox = { innerTextField ->
+                                                Box(
+                                                    modifier =
+                                                        Modifier
+                                                            .fillMaxWidth()
+                                                            .border(
+                                                                width = 1.dp,
+                                                                color = cellOutlineColor,
+                                                                shape = RoundedCornerShape(8.dp),
+                                                            )
+                                                            .padding(horizontal = 12.dp, vertical = 10.dp),
                                                 ) {
-                                                    Icon(
-                                                        Icons.AutoMirrored.Filled.MergeType,
-                                                        contentDescription = "Nối với câu trước",
-                                                    )
+                                                    innerTextField()
                                                 }
-                                            }
-                                            IconButton(
-                                                onClick = {
-                                                    keyboardController?.hide()
-                                                    if (focusedParagraphIndex != flatIdx) {
-                                                        Toast.makeText(
-                                                            ctx,
-                                                            "Chạm vào ô câu này, đặt con trỏ tại chỗ tách, rồi bấm lại.",
-                                                            Toast.LENGTH_SHORT,
-                                                        ).show()
-                                                        return@IconButton
-                                                    }
-                                                    if (!splitParagraphAtCaretForToolbar(flatIdx)) {
-                                                        Toast.makeText(
-                                                            ctx,
-                                                            "Đặt con trỏ giữa nội dung để tách thành đoạn mới (như xuống dòng).",
-                                                            Toast.LENGTH_SHORT,
-                                                        ).show()
-                                                    }
-                                                },
-                                            ) {
-                                                Icon(
-                                                    Icons.Filled.HorizontalSplit,
-                                                    contentDescription = "Tách đoạn mới tại con trỏ (như xuống dòng)",
-                                                )
-                                            }
-                                        }
+                                            },
+                                        )
                                     }
                                 }
                             }
@@ -2757,6 +2769,37 @@ fun ReaderTab(
                     Toast.makeText(
                         ctx,
                         e.message ?: "Không xóa được truyện",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        },
+        onJoinStoryIntoPrevious = { appendFromId, targetId ->
+            scope.launch {
+                val cid = libraryStoryPickerCategoryId ?: return@launch
+                try {
+                    if (paragraphSplitMode) flushParagraphParentPersist()
+                    val bodyToPersist = canonicalTextFromRaw(text)
+                    val sid = activeLibraryStoryId
+                    withContext(Dispatchers.IO) {
+                        if (sid != null && (sid == appendFromId || sid == targetId)) {
+                            libraryRepository.updateStoryTextIfExists(sid, bodyToPersist)
+                        }
+                        libraryRepository.joinAppendStoryIntoTarget(targetId, appendFromId)
+                    }
+                    libraryStoryPickerStories =
+                        withContext(Dispatchers.IO) {
+                            libraryRepository.listStories(cid)
+                        }
+                    lastLibraryStoryPickerCategoryId = cid
+                    onLibraryDataChanged()
+                    libraryStoryPickerOpen = false
+                    libraryStoryPickerCategoryId = null
+                    onOpenLibraryStory(targetId)
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        ctx,
+                        e.message ?: "Không ghép được truyện",
                         Toast.LENGTH_SHORT,
                     ).show()
                 }

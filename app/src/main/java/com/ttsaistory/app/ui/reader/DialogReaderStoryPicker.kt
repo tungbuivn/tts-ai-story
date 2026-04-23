@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -57,7 +58,8 @@ import kotlinx.coroutines.delay
  * hai lớp `Box` chồng nhau: scrim full màn (trái bấm đóng) + dải phải **full chiều cao** vùng tab (nền
  * [androidx.compose.material3.MaterialTheme.colorScheme.surface] kín, không để lộ nội dung phía dưới),
  * bên trong là [Card]. [BackHandler] gọi [onDismissRequest]. [LazyColumn] + `key`; lọc debounce;
- * đổi thứ tự (sort_order) khi không lọc; xóa truyện ([onDeleteStory]) sau khi xác nhận [AppAlertDialog].
+ * đổi thứ tự (sort_order) khi không lọc; xóa truyện ([onDeleteStory]) sau khi xác nhận [AppAlertDialog];
+ * ghép truyện vào truyện ngay phía trên trong danh sách ([onJoinStoryIntoPrevious]) khi không lọc.
  * Mỗi dòng hiển thị [LibraryStoryRow.lastSpeechSentenceIndex] (câu 1-based); hàng [currentStoryId] được tô nổi.
  */
 @Composable
@@ -74,10 +76,13 @@ internal fun DialogReaderStoryPicker(
     /** [delta] `-1` lên trên, `+1` xuống dưới (chỉ khi danh sách không bị lọc). */
     onMoveStoryOrder: (storyId: Long, delta: Int) -> Unit,
     onDeleteStory: (storyId: Long) -> Unit,
+    /** Ghép nội dung [storyId] vào truyện [previousStoryId] (phía trên), mở đích, xóa [storyId]. */
+    onJoinStoryIntoPrevious: (storyId: Long, previousStoryId: Long) -> Unit,
 ) {
     val listState = rememberLazyListState()
     var filterText by remember { mutableStateOf("") }
     var deleteConfirmStory by remember { mutableStateOf<LibraryStoryRow?>(null) }
+    var joinConfirmPair by remember { mutableStateOf<Pair<LibraryStoryRow, LibraryStoryRow>?>(null) }
     var debouncedFilter by remember { mutableStateOf("") }
     LaunchedEffect(filterText) {
         delay(220)
@@ -100,7 +105,10 @@ internal fun DialogReaderStoryPicker(
         }
 
     LaunchedEffect(visible) {
-        if (!visible) deleteConfirmStory = null
+        if (!visible) {
+            deleteConfirmStory = null
+            joinConfirmPair = null
+        }
     }
 
     LaunchedEffect(currentStoryId, displayed, loading, visible) {
@@ -371,14 +379,28 @@ internal fun DialogReaderStoryPicker(
                                                     )
                                                 }
                                             }
-                                            IconButton(
-                                                onClick = { deleteConfirmStory = story },
-                                                enabled = !loading,
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Filled.Delete,
-                                                    contentDescription = "Xóa truyện",
-                                                )
+                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                IconButton(
+                                                    onClick = { deleteConfirmStory = story },
+                                                    enabled = !loading,
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Delete,
+                                                        contentDescription = "Xóa truyện",
+                                                    )
+                                                }
+                                                IconButton(
+                                                    onClick = {
+                                                        val prev = displayed[idx - 1]
+                                                        joinConfirmPair = prev to story
+                                                    },
+                                                    enabled = reorderEnabled && idx > 0 && !loading,
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.MergeType,
+                                                        contentDescription = "Ghép vào truyện phía trên",
+                                                    )
+                                                }
                                             }
                                         }
                                         HorizontalDivider()
@@ -404,6 +426,33 @@ internal fun DialogReaderStoryPicker(
                         },
                     ) {
                         Text("Xóa")
+                    }
+                },
+            )
+        }
+        joinConfirmPair?.let { (targetPrev, appendFrom) ->
+            val targetTitle =
+                targetPrev.title.ifBlank { "Không tiêu đề (#${targetPrev.id})" }
+            val appendTitle =
+                appendFrom.title.ifBlank { "Không tiêu đề (#${appendFrom.id})" }
+            AppAlertDialog(
+                tone = DialogSemanticTone.Warning,
+                onDismissRequest = { joinConfirmPair = null },
+                title = { Text("Ghép truyện?") },
+                text = {
+                    Text(
+                        "Nối nội dung «$appendTitle» vào cuối «$targetTitle», mở «$targetTitle», " +
+                            "rồi xóa «$appendTitle».",
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            onJoinStoryIntoPrevious(appendFrom.id, targetPrev.id)
+                            joinConfirmPair = null
+                        },
+                    ) {
+                        Text("Ghép")
                     }
                 },
             )

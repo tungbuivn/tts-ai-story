@@ -82,7 +82,7 @@ import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.fonts.EditorFontConfigDialog
 import com.ttsaistory.app.ui.reader.ExportM4aTopBarState
 import com.ttsaistory.app.ui.reader.ReaderReadingProgress
-import com.ttsaistory.app.ui.reader.SystemTtsSettingsScreen
+import com.ttsaistory.app.ui.SystemTtsSettingsScreen
 import com.ttsaistory.app.ui.reader.ReaderBottomNavBridge
 import com.ttsaistory.app.model.saveLastText
 import com.ttsaistory.app.speech.ElevenLabsParagraphSpeechEngine
@@ -1403,14 +1403,23 @@ fun AppTabs() {
             systemTtsPitch = systemTtsPitch,
             onOpenStoryFromLibrary = { storyId ->
                 coroutineScope.launch {
+                    val previousActiveLibraryStoryId = activeLibraryStoryId
                     stopAllSpeechReading()
                     val rowForRefresh =
                         withContext(Dispatchers.IO) {
                             storyLibrary.getStory(storyId)
                         }
-                    if (rowForRefresh != null &&
-                        storyLibrary.storyNeedsOnlineContentRefresh(rowForRefresh)
-                    ) {
+                    if (rowForRefresh == null) {
+                        Toast.makeText(
+                            context,
+                            "Không tìm thấy truyện trong thư viện.",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        return@launch
+                    }
+                    // Gán sớm để UI (vd. bảng chọn truyện) không còn trỏ tới bản ghi đã xóa trong lúc đọc file.
+                    activeLibraryStoryId = storyId
+                    if (storyLibrary.storyNeedsOnlineContentRefresh(rowForRefresh)) {
                         try {
                             OnlineCategoryHeadlessStoryTextSync.syncOnlineStoryFromWebPage(
                                 context = context,
@@ -1436,6 +1445,7 @@ fun AppTabs() {
                             "Không đọc được file truyện.",
                             Toast.LENGTH_LONG,
                         ).show()
+                        activeLibraryStoryId = previousActiveLibraryStoryId
                         return@launch
                     }
                     val row =
@@ -1450,7 +1460,6 @@ fun AppTabs() {
                         .edit()
                         .putLastReadingBookmark(savedIdx, storyId)
                         .commit()
-                    activeLibraryStoryId = storyId
                     librarySyncEpoch++
                     val insertedNextPlaceholder =
                         withContext(Dispatchers.IO) {

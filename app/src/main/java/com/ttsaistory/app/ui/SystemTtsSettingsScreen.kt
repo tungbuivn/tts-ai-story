@@ -1,4 +1,4 @@
-package com.ttsaistory.app.ui.reader
+package com.ttsaistory.app.ui
 
 import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice

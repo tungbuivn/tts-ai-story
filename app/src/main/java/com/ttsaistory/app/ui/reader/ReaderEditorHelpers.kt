@@ -6,6 +6,16 @@ import androidx.compose.ui.text.input.TextFieldValue
 import com.ttsaistory.app.domain.sanitizeParagraphText
 import com.ttsaistory.app.model.AppEditorConstants
 
+/**
+ * Gán trong [ReaderTab] khi `paragraphSplitMode` để bottom bar gọi nối / tách / xóa
+ * mà không cần đăng ký lại toàn bộ lambda từ scope lồng sâu.
+ */
+class ReaderParagraphSplitEditActionSink {
+    var joinUp: () -> Unit = {}
+    var splitAtCaret: () -> Unit = {}
+    var deleteCell: () -> Unit = {}
+}
+
 /** Bỏ ô con blank; bỏ đoạn không còn ô; luôn ít nhất một đoạn một ô (có thể rỗng để gõ). */
 fun compactParagraphGroupFieldValues(
     gl: List<List<TextFieldValue>>,
@@ -55,13 +65,23 @@ fun fullTextBlockCaretForToolbar(
     return fullTextFieldValue.selection.start.coerceIn(0, parentText.length)
 }
 
-/** Đăng ký xuống bottom bar: slider ô đoạn, dán, con trỏ trái/phải, cuộn đầu/cuối (tách đoạn) hoặc con trỏ đầu/cuối (toàn bộ). */
+/** Đăng ký xuống bottom bar: slider ô đoạn (chỉ xem) hoặc nút nối/tách/xóa (sửa ô), dán, con trỏ, cuộn đầu/cuối. */
 data class ReaderBottomNavBridge(
     val paragraphSplitMode: Boolean,
     /** false khi chỉ xem: ẩn nút dán và bước con trỏ trái/phải trên bottom bar. */
     val showPasteAndCaretStep: Boolean,
-    /** Chế độ theo đoạn: thanh chọn ô (0..max) trên bottom bar. */
+    /** Chế độ theo đoạn chỉ xem: thanh chọn ô (0..max) trên bottom bar. */
     val showParagraphFocusSlider: Boolean,
+    /**
+     * Chế độ sửa theo đoạn: hàng nút cố định (nối lên / tách tại con trỏ / xóa ô) thay cho slider,
+     * tránh co dãn vùng soạn thảo khi kéo slider.
+     */
+    val showParagraphSplitEditBar: Boolean = false,
+    val paragraphSplitEditJoinUpEnabled: Boolean = false,
+    val paragraphSplitEditDeleteEnabled: Boolean = false,
+    val onParagraphSplitEditJoinUp: () -> Unit = {},
+    val onParagraphSplitEditSplitAtCaret: () -> Unit = {},
+    val onParagraphSplitEditDelete: () -> Unit = {},
     val paragraphFocusSliderMax: Int,
     val paragraphFocusSliderValue: Int,
     val onParagraphFocusSliderChange: (Int) -> Unit,

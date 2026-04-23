@@ -1996,6 +1996,40 @@ class StoryLibraryRepository(private val context: Context) {
     }
 
     /**
+     * Nối nội dung [appendStoryId] vào cuối [targetStoryId] (đã bỏ dòng đầu trùng tên file nếu có),
+     * đặt `last_speech_sentence_index` của đích về `-1`, rồi xóa truyện [appendStoryId].
+     * Hai truyện phải cùng thể loại.
+     */
+    fun joinAppendStoryIntoTarget(targetStoryId: Long, appendStoryId: Long) {
+        val target = getStory(targetStoryId) ?: error("Không tìm thấy truyện đích")
+        val append = getStory(appendStoryId) ?: error("Không tìm thấy truyện ghép")
+        require(target.categoryId == append.categoryId) { "Hai truyện khác thể loại" }
+        require(targetStoryId != appendStoryId) { "Không ghép truyện vào chính nó" }
+        val a = readStoryTextBodyForMerge(targetStoryId).trimEnd()
+        val b = readStoryTextBodyForMerge(appendStoryId).trim()
+        val merged =
+            when {
+                a.isEmpty() -> b
+                b.isEmpty() -> a
+                else -> "$a\n\n$b"
+            }
+        updateStoryText(targetStoryId, merged)
+        val now = System.currentTimeMillis()
+        val cv =
+            ContentValues().apply {
+                put("last_speech_sentence_index", -1)
+                put("updated_at", now)
+            }
+        helper.writableDatabase.update(
+            "saved_stories",
+            cv,
+            "id = ?",
+            arrayOf(targetStoryId.toString()),
+        )
+        deleteStory(appendStoryId)
+    }
+
+    /**
      * Ghi nội dung truyện giống [updateStoryText] nhưng **không** ném lỗi khi bản ghi đã bị xóa
      * (vd. người dùng xóa truyện rồi mở EPUB/zip — autosave vẫn giữ [storyId] cũ trong state).
      */
