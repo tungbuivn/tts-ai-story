@@ -7,8 +7,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Tách/ghép văn bản theo **đoạn** (một dòng = một đoạn, cách nhau bằng `\n`) và **câu** (dấu chấm đơn
- * và ký tự `|`).
+ * Tách/ghép văn bản theo **đoạn** (một dòng = một đoạn, cách nhau bằng `\n`; dòng tiếp theo bắt đầu
+ * bằng chữ thường sau khi trim thì gộp vào đoạn trước) và **câu** (dấu chấm đơn và ký tự `|`).
  *
  * Định dạng lưu: giữa các **đoạn** là `\n`; trong một đoạn các **câu** nối bằng **khoảng trắng**
  * (không dùng `\n` giữa các câu).
@@ -317,6 +317,7 @@ object ParagraphTextService {
      * với `*`, `_`, `+`, `-`: bỏ khoảng trắng kề dấu, gộp dấu giống liền nhau thành một, dòng chỉ còn một dấu → rỗng;
      * chấm đơn ranh giới câu (không `..`/`...`): bỏ khoảng trắng quanh `.`, nếu sau chấm là chữ Unicode thì chèn một khoảng trắng (vd. `a.b` → `a. b`).
      * Dấu ngoặc kép Unicode (“ ” « » …) được giữ như ký tự hợp lệ (paste từ nguồn khác).
+     * Sau các bước trên: tại **đầu câu** (đầu khối, sau `|`, sau `.` `!` `?`, sau xuống dòng), nếu gặp `-` rồi ngay một ký tự không phải khoảng trắng thì chèn một khoảng trắng (vd. `-Chào` → `- Chào`) — chạy cuối để không bị bước markdown gỡ khoảng kề `-`.
      */
     fun sanitizeParagraphText(input: String): String {
         val sb = StringBuilder(input.length)
@@ -364,22 +365,175 @@ object ParagraphTextService {
             }
         }
         val trimmed = sb.toString().trim()
-        return normalizeSingleSentenceDotWhitespace(
-            normalizeMarkdownLikeMarkers(
-                trimWhitespaceInsideAsciiDoubleQuotedSpans(trimmed),
-            ),
-        )
+        val normalized =
+            normalizeSingleSentenceDotWhitespace(
+                normalizeMarkdownLikeMarkers(
+                    trimWhitespaceInsideAsciiDoubleQuotedSpans(trimmed),
+                ),
+            )
+        return insertSpaceAfterSentenceLeadingHyphenBeforeNonWhitespace(normalized)
     }
 
     /**
+     * (1) Đầu câu: sau `|`, `.` `!` `?`, hoặc `\n` / `\r`, hoặc đầu chuỗi — nếu `-` rồi ký tự không phải
+     * khoảng trắng thì chèn một khoảng trắng sau `-`.
+     * (2) Gạch ngang giữa **hai chữ** Unicode (`\p{L}`), không áp dụng khi có chữ số (`3-4`, `a-2`).
+     * (3) Gạch ngang ngay sau `.` `!` `?` (khoảng trắng tùy chọn) rồi tới ký tự không trắng: chèn khoảng
+     * (vd. `nói.-Chào` → `nói. - Chào`).
+     */
+    private fun insertSpaceAfterSentenceLeadingHyphenBeforeNonWhitespace(s: String): String {
+        if (s.isEmpty()) return s
+        val out = StringBuilder(s.length + 8)
+        var atSentenceStart = true
+        var i = 0
+        while (i < s.length) {
+            val ch = s[i]
+            if (atSentenceStart) {
+                if (ch.isWhitespace()) {
+                    out.append(ch)
+                    i++
+                    continue
+                }
+                if (ch == '-' && i + 1 < s.length && !s[i + 1].isWhitespace()) {
+                    out.append("- ")
+                    atSentenceStart = false
+                    i++
+                    continue
+                }
+                atSentenceStart = false
+            }
+            out.append(ch)
+            when (ch) {
+                '|' -> atSentenceStart = true
+                '.', '!', '?' -> atSentenceStart = true
+                '\n', '\r' -> atSentenceStart = true
+                else -> {}
+            }
+            i++
+        }
+        return insertSpacesAroundHyphenBetweenNonWhitespaceNeighbors(out.toString())
+    }
+
+    private fun insertSpacesAroundHyphenBetweenNonWhitespaceNeighbors(s: String): String {
+        var t =
+            s.replace(HyphenAfterSentencePunctBeforeNonSpace) { m ->
+                m.groupValues[1] + " - "
+            }
+        t = t.replace(HyphenBetweenUnicodeLetters, " - ")
+        return t
+    }
+
+    /** Sau `.` `!` `?`, tùy khoảng trắng, rồi `-` rồi ký tự không trắng — nhóm 1 là dấu câu. */
+    private val HyphenAfterSentencePunctBeforeNonSpace = Regex("""([.!?])(\s*)-(?=\S)""")
+
+    /** Hai chữ Unicode (bỏ số / ký tự khác) hai bên `-`. */
+    private val HyphenBetweenUnicodeLetters = Regex("""(?<=\p{L})-(?=\p{L})""")
+
+    /**
      * Chia toàn bộ [raw] thành các **đoạn** (một đoạn = một dòng theo `\n`), đã sanitize, bỏ dòng
-     * rỗng.
+     * rỗng. Dòng sau dòng trống không gộp; dòng không trống mà sau khi trim bắt đầu bằng chữ thường
+     * thì gộp vào đoạn trước (cùng quy tắc [parseStoredTextToParagraphGroups]).
      */
     fun splitFullTextIntoParagraphLines(raw: String): List<String> {
-        return raw
-            .split('\n')
-            .map { sanitizeParagraphText(it.replace("\r", "")) }
+        val body = raw.trimEnd('\r', '\n')
+        if (body.isEmpty()) return emptyList()
+        return mergeNewlineSplitLinesIfLowercaseContinuation(physicalLinesWithBodyCharMap(body), body)
+            .map { sanitizeParagraphText(it.first) }
             .filter { it.isNotEmpty() }
+    }
+
+    /** Mỗi dòng vật lý (tách bằng `\n` trong [body]): văn bản (bỏ `\r`) + map mỗi ký tự → chỉ số trong [body]. */
+    private fun physicalLinesWithBodyCharMap(body: String): List<Pair<String, IntArray>> {
+        val lines = mutableListOf<Pair<String, IntArray>>()
+        val n = body.length
+        var lineStart = 0
+        while (lineStart <= n) {
+            if (lineStart >= n) break
+            var i = lineStart
+            while (i < n && body[i] != '\n') i++
+            lines.add(lineTextAndBodyCharMap(body, lineStart, i))
+            lineStart = i + 1
+        }
+        return lines
+    }
+
+    private fun lineTextAndBodyCharMap(body: String, lineStart: Int, lineEndExclusive: Int): Pair<String, IntArray> {
+        val sb = StringBuilder(lineEndExclusive - lineStart)
+        val map = mutableListOf<Int>()
+        for (p in lineStart until lineEndExclusive) {
+            val ch = body[p]
+            if (ch == '\r') continue
+            sb.append(ch)
+            map.add(p)
+        }
+        return sb.toString() to map.toIntArray()
+    }
+
+    private fun lineStartsWithLowercaseLetterAfterTrim(text: String): Boolean {
+        val t = text.trimStart()
+        if (t.isEmpty()) return false
+        val ch = t.firstOrNull { it.isLetter() } ?: return false
+        return ch.isLowerCase()
+    }
+
+    /**
+     * Gộp các dòng vật lý liên tiếp: nếu dòng [i] (không rỗng) bắt đầu bằng chữ thường sau trim
+     * thì nối vào đoạn đang tích lũy với khoảng trắng (ký tự `\n` gốc map vào vị trí khoảng trắng logic).
+     * Dòng rỗng → kết thúc đoạn (không gộp qua dòng trống).
+     */
+    private fun mergeNewlineSplitLinesIfLowercaseContinuation(
+        physical: List<Pair<String, IntArray>>,
+        body: String,
+    ): List<Pair<String, IntArray>> {
+        if (physical.isEmpty()) return emptyList()
+        val out = mutableListOf<Pair<String, IntArray>>()
+        var bufText: StringBuilder? = null
+        var bufMap: MutableList<Int>? = null
+
+        fun flush() {
+            val b = bufText ?: return
+            val t = b.toString()
+            if (t.isNotEmpty()) {
+                out.add(t to bufMap!!.toIntArray())
+            }
+            bufText = null
+            bufMap = null
+        }
+
+        for ((text, map) in physical) {
+            if (text.isEmpty()) {
+                flush()
+                continue
+            }
+            val startsLower = lineStartsWithLowercaseLetterAfterTrim(text)
+            if (bufText == null) {
+                bufText = StringBuilder(text)
+                bufMap = map.toMutableList()
+            } else if (startsLower) {
+                val cur = bufText ?: continue
+                val curMap = bufMap ?: continue
+                val trimLead = (text.length - text.trimStart().length).coerceAtMost(map.size)
+                val addText = text.substring(trimLead)
+                val addMap = map.copyOfRange(trimLead, map.size)
+                if (addMap.isEmpty()) continue
+                val joinIdx =
+                    (addMap[0] - 1).takeIf { j ->
+                        j >= 0 && j < body.length && body[j] == '\n'
+                    } ?: addMap[0]
+                if (cur.isNotEmpty() && addText.isNotEmpty()) {
+                    cur.append(' ')
+                    curMap.add(joinIdx)
+                }
+                cur.append(addText)
+                curMap.addAll(addMap.toList())
+            } else {
+                flush()
+                bufText = StringBuilder(text)
+                bufMap = map.toMutableList()
+            }
+        }
+        flush()
+        return out
     }
 
     /**
@@ -470,7 +624,8 @@ object ParagraphTextService {
 
     /**
      * Parse chuỗi đã lưu → `List<đoạn<List<câu>>>`.
-     * Mỗi dòng (phân tách bằng `\n`) là một đoạn; dòng rỗng bỏ qua. Trong mỗi dòng tách câu theo `|` và chấm đơn.
+     * Sau khi tách `\n`, dòng không rỗng mà bắt đầu bằng chữ thường (sau trim) được gộp vào đoạn trước;
+     * dòng rỗng kết thúc đoạn. Trong mỗi đoạn logic tách câu theo `|` và chấm đơn.
      *
      * Kết quả được cache theo tham số [raw] (so sánh nội dung `==`); gọi lại với cùng chuỗi trả về
      * cùng tham chiếu danh sách đã parse — không sửa đổi từ bên ngoài.
@@ -501,10 +656,11 @@ object ParagraphTextService {
             publishTotalItemCountFromGroups(empty)
             return empty
         }
+        val mergedLines =
+            mergeNewlineSplitLinesIfLowercaseContinuation(physicalLinesWithBodyCharMap(body), body)
         val result =
-            body
-                .split('\n')
-                .map { sanitizeParagraphText(it.replace("\r", "")) }
+            mergedLines
+                .map { (line, _) -> sanitizeParagraphText(line.replace("\r", "")) }
                 .mapNotNull { line ->
                     if (line.isEmpty()) null
                     else {
@@ -535,30 +691,27 @@ object ParagraphTextService {
         return lineBasedFlatSentenceRanges(raw)
     }
 
-    /** Mỗi dòng `\n` một đoạn; câu trong dòng theo `|`, chấm hoặc cả dòng (khoảng trắng giữa câu). */
+    /** Mỗi đoạn logic sau gộp dòng (xem [mergeNewlineSplitLinesIfLowercaseContinuation]); câu theo `|`, chấm. */
     private fun lineBasedFlatSentenceRanges(raw: String): List<IntRange> {
         val out = mutableListOf<IntRange>()
         val s = raw
-        val n = s.length
-        var lineStart = 0
-        var i = 0
-        while (lineStart <= n) {
-            if (lineStart >= n) break
-            i = lineStart
-            while (i < n && s[i] != '\n') i++
-            val line = s.substring(lineStart, i).replace("\r", "")
-            val san = sanitizeParagraphText(line)
-            if (san.isNotEmpty()) {
-                val locals = sentenceRangesWithinMainBlock(line)
-                for (lr in locals) {
-                    val g0 = lineStart + lr.first
-                    val g1 = lineStart + lr.last + 1
-                    if (g0 < g1 && g1 <= n && sanitizeParagraphText(s.substring(g0, g1)).isNotEmpty()) {
-                        out.add(g0 until g1)
-                    }
+        val body = s.trimEnd('\r', '\n')
+        if (body.isEmpty()) return out
+        val merged =
+            mergeNewlineSplitLinesIfLowercaseContinuation(physicalLinesWithBodyCharMap(body), body)
+        for ((logical, charMap) in merged) {
+            val san = sanitizeParagraphText(logical)
+            if (san.isEmpty()) continue
+            val locals = sentenceRangesWithinMainBlock(logical)
+            for (lr in locals) {
+                if (lr.first !in charMap.indices || lr.last !in charMap.indices) continue
+                val g0 = charMap[lr.first]
+                val g1 = charMap[lr.last] + 1
+                val slice = logical.substring(lr.first, lr.last + 1)
+                if (g0 < g1 && g1 <= s.length && sanitizeParagraphText(slice).isNotEmpty()) {
+                    out.add(g0 until g1)
                 }
             }
-            lineStart = i + 1
         }
         return out
     }

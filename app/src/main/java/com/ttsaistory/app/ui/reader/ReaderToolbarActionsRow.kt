@@ -10,8 +10,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.NoteAdd
-import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayCircle
@@ -28,8 +29,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 
 /**
- * Cột nút công cụ tab nhập văn: xem/chỉnh sửa, phát, dừng, xuất AAC, (truyện web) tải lại nội dung,
- * chuyển thể loại, truyện mới; một nút chuyển toàn văn / lưới đoạn (sau xuất AAC) khi đang chỉnh sửa.
+ * Cột nút công cụ tab nhập văn: xem/chỉnh sửa, phát, dừng, (truyện web) tải lại nội dung,
+ * truyện trước/sau trong thể loại, chuyển thể loại, truyện mới; một nút chuyển toàn văn / lưới đoạn khi đang chỉnh sửa. (Xuất AAC trên top bar.)
  */
 @Composable
 internal fun ReaderToolbarActionsColumn(
@@ -40,8 +41,6 @@ internal fun ReaderToolbarActionsColumn(
     playParagraphsEnabled: Boolean,
     onStopSpeechClick: () -> Unit,
     stopSpeechEnabled: Boolean,
-    onExportM4aClick: () -> Unit,
-    exportM4aEnabled: Boolean,
     showReloadWebContent: Boolean,
     onReloadWebContentClick: () -> Unit,
     reloadWebContentEnabled: Boolean,
@@ -49,6 +48,10 @@ internal fun ReaderToolbarActionsColumn(
     moveStoryCategoryEnabled: Boolean,
     onNewLibraryStoryClick: () -> Unit,
     newLibraryStoryEnabled: Boolean,
+    onNavigatePrevLibraryStoryClick: () -> Unit,
+    navigatePrevLibraryStoryEnabled: Boolean,
+    onNavigateNextLibraryStoryClick: () -> Unit,
+    navigateNextLibraryStoryEnabled: Boolean,
     paragraphSplitMode: Boolean,
     onSwitchToFullTextMode: () -> Unit,
     onSwitchToParagraphSplitMode: () -> Unit,
@@ -96,15 +99,6 @@ internal fun ReaderToolbarActionsColumn(
                     contentDescription = "Dừng đọc",
                 )
             }
-            IconButton(
-                onClick = onExportM4aClick,
-                enabled = exportM4aEnabled,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.AudioFile,
-                    contentDescription = "Lưu AAC (.m4a)",
-                )
-            }
             if (!textEditorChromeViewOnly) {
                 IconButton(
                     onClick = {
@@ -148,6 +142,24 @@ internal fun ReaderToolbarActionsColumn(
                         contentDescription = "Tải lại nội dung từ web",
                     )
                 }
+            }
+            IconButton(
+                onClick = onNavigatePrevLibraryStoryClick,
+                enabled = navigatePrevLibraryStoryEnabled,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    contentDescription = "Truyện trước trong thể loại",
+                )
+            }
+            IconButton(
+                onClick = onNavigateNextLibraryStoryClick,
+                enabled = navigateNextLibraryStoryEnabled,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = "Truyện sau trong thể loại",
+                )
             }
             Spacer(modifier = Modifier.weight(1f))
             IconButton(

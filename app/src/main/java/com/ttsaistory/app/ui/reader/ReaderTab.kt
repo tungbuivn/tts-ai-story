@@ -197,6 +197,8 @@ fun ReaderTab(
     onSavedLibraryStory: (Long) -> Unit,
     /** Mở một truyện thư viện khác (đồng bộ tab Text / thư viện). */
     onOpenLibraryStory: (Long) -> Unit,
+    /** Đăng ký nút xuất AAC trên top bar; [null] khi ReaderTab huỷ (đổi tab / dispose). */
+    onRegisterExportM4aForTopBar: ((ExportM4aTopBarState?) -> Unit)? = null,
     /** Đăng ký hàm flush bản nháp đoạn lên [text] trước khi app nhận share / đổi truyện thư viện. */
     onRegisterParagraphDraftFlush: ((() -> Unit) -> Unit)? = null,
     /** Đăng ký hành động bottom bar (cuộn đầu/cuối / con trỏ đầu cuối); null khi huỷ đăng ký. */
@@ -245,16 +247,28 @@ fun ReaderTab(
     var exportUiFromCoordinator by remember { mutableStateOf<DialogTtsExportState?>(null) }
     var activeStoryHasWebUrl by remember { mutableStateOf(false) }
     var webContentReloadWorking by remember { mutableStateOf(false) }
+    /** Có truyện trước / sau trong cùng thể loại (theo sort thư viện); null khi không có truyện đang mở. */
+    var libraryAdjacentNav by remember { mutableStateOf<Pair<Boolean, Boolean>?>(null) }
     LaunchedEffect(Unit) {
         TtsExportUiCoordinator.uiState.collect { exportUiFromCoordinator = it }
     }
     LaunchedEffect(activeLibraryStoryId, librarySyncEpoch) {
-        activeStoryHasWebUrl =
-            activeLibraryStoryId?.let { sid ->
-                withContext(Dispatchers.IO) {
+        val sid = activeLibraryStoryId
+        if (sid == null) {
+            activeStoryHasWebUrl = false
+            libraryAdjacentNav = null
+            return@LaunchedEffect
+        }
+        val triple =
+            withContext(Dispatchers.IO) {
+                val web =
                     libraryRepository.getStory(sid)?.onlinePageUrl?.trim()?.isNotEmpty() == true
-                }
-            } == true
+                val hasPrev = libraryRepository.previousStoryInCategoryBefore(sid) != null
+                val hasNext = libraryRepository.nextStoryInCategoryAfter(sid) != null
+                Triple(web, hasPrev, hasNext)
+            }
+        activeStoryHasWebUrl = triple.first
+        libraryAdjacentNav = triple.second to triple.third
     }
 
     LaunchedEffect(activeLibraryStoryId, librarySyncEpoch) {
@@ -688,6 +702,30 @@ fun ReaderTab(
 
     SideEffect {
         onRegisterParagraphDraftFlush?.invoke { flushParagraphParentPersist() }
+    }
+
+    SideEffect {
+        onRegisterExportM4aForTopBar?.invoke(
+            ExportM4aTopBarState(
+                onClick = {
+                    if (paragraphSplitMode) flushParagraphParentPersist()
+                    val exportBody =
+                        if (paragraphSplitMode) mergedParagraphFields() else text
+                    enqueueTtsExport(exportBody)
+                },
+                enabled =
+                    exportUiFromCoordinator == null &&
+                        hasExportableText(
+                            if (paragraphSplitMode) mergedParagraphFields() else text,
+                        ),
+            ),
+        )
+    }
+
+    DisposableEffect(onRegisterExportM4aForTopBar) {
+        onDispose {
+            onRegisterExportM4aForTopBar?.invoke(null)
+        }
     }
 
     val latestFullTextField by rememberUpdatedState(fullTextFieldValue)
@@ -1519,17 +1557,6 @@ fun ReaderTab(
                     (tts != null && ttsReady) ||
                         elevenLabsJobActive ||
                         speakingParagraphIndex >= 0,
-                onExportM4aClick = {
-                    if (paragraphSplitMode) flushParagraphParentPersist()
-                    val exportBody =
-                        if (paragraphSplitMode) mergedParagraphFields() else text
-                    enqueueTtsExport(exportBody)
-                },
-                exportM4aEnabled =
-                    exportUiFromCoordinator == null &&
-                        hasExportableText(
-                            if (paragraphSplitMode) mergedParagraphFields() else text,
-                        ),
                 showReloadWebContent = activeStoryHasWebUrl,
                 onReloadWebContentClick = {
                     keyboardController?.hide()
@@ -1606,6 +1633,54 @@ fun ReaderTab(
                 moveStoryCategoryEnabled =
                     activeLibraryStoryId != null &&
                         exportUiFromCoordinator == null,
+                onNavigatePrevLibraryStoryClick = {
+                    keyboardController?.hide()
+                    val sid = activeLibraryStoryId ?: return@ReaderToolbarActionsColumn
+                    if (paragraphSplitMode) flushParagraphParentPersist()
+                    scope.launch {
+                        val prev =
+                            withContext(Dispatchers.IO) {
+                                libraryRepository.previousStoryInCategoryBefore(sid)
+                            }
+                        if (prev == null) {
+                            Toast.makeText(
+                                ctx,
+                                "Không có truyện trước trong thể loại.",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            return@launch
+                        }
+                        onOpenLibraryStory(prev.id)
+                    }
+                },
+                navigatePrevLibraryStoryEnabled =
+                    exportUiFromCoordinator == null &&
+                        activeLibraryStoryId != null &&
+                        libraryAdjacentNav?.first == true,
+                onNavigateNextLibraryStoryClick = {
+                    keyboardController?.hide()
+                    val sid = activeLibraryStoryId ?: return@ReaderToolbarActionsColumn
+                    if (paragraphSplitMode) flushParagraphParentPersist()
+                    scope.launch {
+                        val next =
+                            withContext(Dispatchers.IO) {
+                                libraryRepository.nextStoryInCategoryAfter(sid)
+                            }
+                        if (next == null) {
+                            Toast.makeText(
+                                ctx,
+                                "Không có truyện sau trong thể loại.",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            return@launch
+                        }
+                        onOpenLibraryStory(next.id)
+                    }
+                },
+                navigateNextLibraryStoryEnabled =
+                    exportUiFromCoordinator == null &&
+                        activeLibraryStoryId != null &&
+                        libraryAdjacentNav?.second == true,
                 onNewLibraryStoryClick = {
                     keyboardController?.hide()
                     scope.launch {
@@ -2683,3 +2758,9 @@ fun ReaderTab(
     )
     }
 }
+
+/** Trạng thái nút xuất AAC trên top bar; [null] khi ReaderTab không gắn. */
+data class ExportM4aTopBarState(
+    val onClick: () -> Unit,
+    val enabled: Boolean,
+)

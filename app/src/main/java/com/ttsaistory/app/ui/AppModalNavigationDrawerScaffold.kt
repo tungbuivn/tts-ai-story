@@ -54,6 +54,7 @@ import com.ttsaistory.app.model.TextTabSpeechEngine
 import com.ttsaistory.app.ui.DialogOnlineDomainParsersManage
 import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.library.LibraryTab
+import com.ttsaistory.app.ui.reader.ExportM4aTopBarState
 import com.ttsaistory.app.ui.reader.MainBottomBar
 import com.ttsaistory.app.ui.reader.ReaderTab
 import com.ttsaistory.app.ui.reader.ReaderBottomNavBridge
@@ -100,6 +101,8 @@ fun AppModalNavigationDrawerScaffold(
     onLibraryDataChanged: () -> Unit,
     onSavedLibraryStoryFromEditor: (Long) -> Unit,
     onRegisterParagraphDraftFlush: ((() -> Unit) -> Unit)?,
+    onRegisterExportM4aForTopBar: ((ExportM4aTopBarState?) -> Unit)?,
+    exportM4aTopBar: ExportM4aTopBarState?,
     onRegisterReaderBottomNav: ((ReaderBottomNavBridge?) -> Unit)?,
     systemTtsSpeechRate: Float,
     systemTtsPitch: Float,
@@ -290,6 +293,7 @@ fun AppModalNavigationDrawerScaffold(
                         onNavigateLibraryToolbar(LibraryCategoryToolbarCommand.AddCategory)
                     },
                     onLibraryImportFolderClick = onLibraryImportFolderRequested,
+                    exportM4aTopBar = exportM4aTopBar,
                 )
             },
             bottomBar = {
@@ -391,6 +395,7 @@ fun AppModalNavigationDrawerScaffold(
                                 onSavedLibraryStory = onSavedLibraryStoryFromEditor,
                                 onOpenLibraryStory = onOpenStoryFromLibrary,
                                 onRegisterParagraphDraftFlush = onRegisterParagraphDraftFlush,
+                                onRegisterExportM4aForTopBar = onRegisterExportM4aForTopBar,
                                 onRegisterReaderBottomNav = onRegisterReaderBottomNav,
                                 systemTtsSpeechRate = systemTtsSpeechRate,
                                 systemTtsPitch = systemTtsPitch,

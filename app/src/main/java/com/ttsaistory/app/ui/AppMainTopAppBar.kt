@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
@@ -21,6 +22,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import com.ttsaistory.app.model.TextTabSpeechEngine
+import com.ttsaistory.app.ui.reader.ExportM4aTopBarState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,6 +35,8 @@ internal fun AppMainTopAppBar(
     onTopBarTextSettingsClick: () -> Unit,
     onLibraryAddCategoryClick: () -> Unit,
     onLibraryImportFolderClick: () -> Unit,
+    /** Tab Text: xuất AAC; null khi không gắn ReaderTab (vd. tab Thư viện). */
+    exportM4aTopBar: ExportM4aTopBarState?,
 ) {
     val scheme = MaterialTheme.colorScheme
     TopAppBar(
@@ -64,6 +68,17 @@ internal fun AppMainTopAppBar(
             ),
         actions = {
             if (tabIndex == 0) {
+                exportM4aTopBar?.let { ex ->
+                    IconButton(
+                        onClick = ex.onClick,
+                        enabled = ex.enabled,
+                    ) {
+                        Icon(
+                            Icons.Filled.AudioFile,
+                            contentDescription = "Lưu AAC (.m4a)",
+                        )
+                    }
+                }
                 IconButton(onClick = onTopBarTextSettingsClick) {
                     Icon(
                         Icons.Filled.Settings,

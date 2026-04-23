@@ -61,6 +61,7 @@ import com.ttsaistory.app.domain.persistOpenedTextFileToLibrary
 import com.ttsaistory.app.domain.readSendStreamAsText
 import com.ttsaistory.app.domain.resolveDocumentDisplayName
 import com.ttsaistory.app.domain.uriLooksLikeEpubArchive
+import com.ttsaistory.app.domain.uriLooksLikePdf
 import com.ttsaistory.app.domain.uriLooksLikeZipArchive
 import com.ttsaistory.app.domain.shouldTreatViewUriAsTxt
 import com.ttsaistory.app.domain.splitIntoParagraphs
@@ -79,6 +80,7 @@ import com.ttsaistory.app.ui.library.OnlineCategoryHeadlessStoryTextSync
 import com.ttsaistory.app.ui.library.OpenFileProgressLogUi
 import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.fonts.EditorFontConfigDialog
+import com.ttsaistory.app.ui.reader.ExportM4aTopBarState
 import com.ttsaistory.app.ui.reader.ReaderReadingProgress
 import com.ttsaistory.app.ui.reader.SystemTtsSettingsScreen
 import com.ttsaistory.app.ui.reader.ReaderBottomNavBridge
@@ -174,6 +176,8 @@ fun AppTabs() {
     var prevLibrarySidForAutosave by remember { mutableStateOf<Long?>(null) }
     /** Gọi [flushParagraphParentPersist] từ [ReaderTab] trước khi ghi file thư viện / nhận share. */
     var paragraphDraftFlush by remember { mutableStateOf<(() -> Unit)?>(null) }
+    /** Tab Text: nút xuất AAC trên top bar (ReaderTab đăng ký). */
+    var exportM4aTopBar by remember { mutableStateOf<ExportM4aTopBarState?>(null) }
     /** Tab Text: cuộn đầu/cuối danh sách đoạn hoặc con trỏ đầu/cuối (chế độ toàn bộ). */
     var readerBottomNavBridge by remember { mutableStateOf<ReaderBottomNavBridge?>(null) }
     /** Đồng bộ bookmark prefs → [ReaderReadingProgress] để mọi @Composable đọc [.intValue]. */
@@ -212,7 +216,7 @@ fun AppTabs() {
             }
     }
 
-    // --- Mở tài liệu SAF (ZIP/EPUB: [importOpenedZipArchiveFromSaf], [importOpenedEpubArchiveFromSaf]) ---
+    // --- Mở tài liệu SAF (ZIP/EPUB/PDF: importOpened*ArchiveFromSaf) ---
     val openTextDocumentLauncher =
         rememberLauncherForActivityResult(
             contract = ActivityResultContracts.OpenDocument(),
@@ -252,6 +256,17 @@ fun AppTabs() {
                             )
                         if (uriLooksLikeEpubArchive(activity, uri, displayName)) {
                             importOpenedEpubArchiveFromSaf(
+                                activity,
+                                storyLibrary,
+                                uri,
+                                displayName,
+                                safArchiveImportLogBridge,
+                                onFinishedGoToLibraryTab = ::goToLibraryAfterSafImport,
+                            )
+                            return@launch
+                        }
+                        if (uriLooksLikePdf(activity, uri, displayName)) {
+                            importOpenedPdfArchiveFromSaf(
                                 activity,
                                 storyLibrary,
                                 uri,
@@ -605,6 +620,30 @@ fun AppTabs() {
             clearShareIntent()
             coroutineScope.launch {
                 try {
+                    val sendDisplayName =
+                        withContext(Dispatchers.IO) {
+                            resolveDocumentDisplayName(activity, streamUri)
+                        }
+                    if (uriLooksLikePdf(activity, streamUri, sendDisplayName)) {
+                        flushCurrentOpenLibraryStoryBeforeInboundImport()
+                        openFileProgressLog =
+                            OpenFileProgressLogUi(
+                                displayName = sendDisplayName?.trim()?.takeIf { it.isNotEmpty() },
+                                message = "Đang xử lý PDF…",
+                            )
+                        importOpenedPdfArchiveFromSaf(
+                            activity,
+                            storyLibrary,
+                            streamUri,
+                            sendDisplayName,
+                            safArchiveImportLogBridge,
+                            onFinishedGoToLibraryTab = {
+                                libraryRefreshTrigger++
+                                tabIndex = 1
+                            },
+                        )
+                        return@launch
+                    }
                     val raw =
                         withContext(Dispatchers.IO) {
                             readSendStreamAsText(activity, streamUri)
@@ -629,6 +668,8 @@ fun AppTabs() {
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    openFileProgressLog = null
+                    importProgressMainHandler.post { openFileProgressLog = null }
                     Toast.makeText(
                         activity,
                         e.message ?: "Lỗi lưu thư viện",
@@ -658,7 +699,117 @@ fun AppTabs() {
                 clearShareIntent()
                 return
             }
-            if (!shouldTreatViewUriAsTxt(uri, resolvedType)) return
+            val viewDisplayName =
+                runCatching {
+                    resolveDocumentDisplayName(activity, uri)
+                }.getOrNull()
+            if (uriLooksLikePdf(activity, uri, viewDisplayName)) {
+                clearShareIntent()
+                coroutineScope.launch {
+                    try {
+                        flushCurrentOpenLibraryStoryBeforeInboundImport()
+                        openFileProgressLog =
+                            OpenFileProgressLogUi(
+                                displayName = viewDisplayName?.trim()?.takeIf { it.isNotEmpty() },
+                                message = "Đang xử lý PDF…",
+                            )
+                        importOpenedPdfArchiveFromSaf(
+                            activity,
+                            storyLibrary,
+                            uri,
+                            viewDisplayName,
+                            safArchiveImportLogBridge,
+                            onFinishedGoToLibraryTab = {
+                                libraryRefreshTrigger++
+                                tabIndex = 1
+                            },
+                        )
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        openFileProgressLog = null
+                        importProgressMainHandler.post { openFileProgressLog = null }
+                        Toast.makeText(
+                            activity,
+                            e.message ?: "Lỗi nhập PDF",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+                return
+            }
+            val viewLooksEpub = uriLooksLikeEpubArchive(activity, uri, viewDisplayName)
+            if (viewLooksEpub) {
+                clearShareIntent()
+                coroutineScope.launch {
+                    try {
+                        flushCurrentOpenLibraryStoryBeforeInboundImport()
+                        openFileProgressLog =
+                            OpenFileProgressLogUi(
+                                displayName = viewDisplayName?.trim()?.takeIf { it.isNotEmpty() },
+                                message = "Đang xử lý EPUB…",
+                            )
+                        importOpenedEpubArchiveFromSaf(
+                            activity,
+                            storyLibrary,
+                            uri,
+                            viewDisplayName,
+                            safArchiveImportLogBridge,
+                            onFinishedGoToLibraryTab = {
+                                libraryRefreshTrigger++
+                                tabIndex = 1
+                            },
+                        )
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        openFileProgressLog = null
+                        importProgressMainHandler.post { openFileProgressLog = null }
+                        Toast.makeText(
+                            activity,
+                            e.message ?: "Lỗi nhập EPUB",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+                return
+            }
+            if (uriLooksLikeZipArchive(activity, uri, viewDisplayName) && !viewLooksEpub) {
+                clearShareIntent()
+                coroutineScope.launch {
+                    try {
+                        flushCurrentOpenLibraryStoryBeforeInboundImport()
+                        openFileProgressLog =
+                            OpenFileProgressLogUi(
+                                displayName = viewDisplayName?.trim()?.takeIf { it.isNotEmpty() },
+                                message = "Đang xử lý ZIP…",
+                            )
+                        importOpenedZipArchiveFromSaf(
+                            activity,
+                            storyLibrary,
+                            uri,
+                            viewDisplayName,
+                            safArchiveImportLogBridge,
+                            onFinishedGoToLibraryTab = {
+                                libraryRefreshTrigger++
+                                tabIndex = 1
+                            },
+                        )
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        openFileProgressLog = null
+                        importProgressMainHandler.post { openFileProgressLog = null }
+                        Toast.makeText(
+                            activity,
+                            e.message ?: "Lỗi nhập ZIP",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+                return
+            }
+            if (!shouldTreatViewUriAsTxt(uri, resolvedType, viewDisplayName)) return
 
             clearShareIntent()
             coroutineScope.launch {
@@ -1243,6 +1394,8 @@ fun AppTabs() {
             onRegisterParagraphDraftFlush = { flush ->
                 paragraphDraftFlush = flush
             },
+            onRegisterExportM4aForTopBar = { exportM4aTopBar = it },
+            exportM4aTopBar = exportM4aTopBar,
             onRegisterReaderBottomNav = { bridge ->
                 readerBottomNavBridge = bridge
             },
@@ -1318,6 +1471,7 @@ fun AppTabs() {
                         "application/zip",
                         "application/x-zip-compressed",
                         "application/epub+zip",
+                        "application/pdf",
                         "*/*",
                     ),
                 )

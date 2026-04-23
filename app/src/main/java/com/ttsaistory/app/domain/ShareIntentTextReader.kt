@@ -15,17 +15,25 @@ fun readSendStreamAsText(context: Context, uri: Uri): String? =
         null
     }
 
-/** VIEW / Open with: chỉ nạp khi mime là text hoặc đuôi .txt (kèm octet-stream). */
-fun shouldTreatViewUriAsTxt(uri: Uri, contentType: String?): Boolean {
+/** VIEW / Open with: mime text*, đuôi .txt trên path/segment, hoặc [displayName] (DocumentsUI). */
+fun shouldTreatViewUriAsTxt(
+    uri: Uri,
+    contentType: String?,
+    displayName: String? = null,
+): Boolean {
     val type = contentType?.lowercase(Locale.ROOT).orEmpty()
     if (type.startsWith("text/")) return true
     val path = uri.path.orEmpty()
     val seg = uri.lastPathSegment.orEmpty()
+    val name = displayName?.trim().orEmpty()
     val endsTxt =
-        path.endsWith(".txt", ignoreCase = true) || seg.endsWith(".txt", ignoreCase = true)
+        path.endsWith(".txt", ignoreCase = true) ||
+            seg.endsWith(".txt", ignoreCase = true) ||
+            name.endsWith(".txt", ignoreCase = true)
     if (type == "application/octet-stream" || type == "binary/octet-stream") {
         return endsTxt
     }
+    if (type.isEmpty() && endsTxt) return true
     return endsTxt
 }
 

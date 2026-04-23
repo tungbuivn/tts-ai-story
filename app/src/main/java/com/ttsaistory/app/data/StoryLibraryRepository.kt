@@ -885,6 +885,15 @@ class StoryLibraryRepository(private val context: Context) {
         return list.getOrNull(idx + 1)
     }
 
+    /** Truyện trước trong cùng thể loại; null nếu là đầu danh sách. */
+    fun previousStoryInCategoryBefore(storyId: Long): LibraryStoryRow? {
+        val row = getStory(storyId) ?: return null
+        val list = listStories(row.categoryId)
+        val idx = list.indexOfFirst { it.id == storyId }
+        if (idx <= 0) return null
+        return list.getOrNull(idx - 1)
+    }
+
     /**
      * Truyện trong thể loại có [LibraryStoryRow.onlinePageUrl] khớp [pageUrl]
      * (sau [normalizeOnlineStoryPageUrlForMatch]).
