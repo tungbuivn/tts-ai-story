@@ -20,6 +20,8 @@ import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FirstPage
 import androidx.compose.material.icons.filled.HorizontalSplit
+import androidx.compose.material.icons.outlined.Keyboard
+import androidx.compose.material.icons.outlined.KeyboardHide
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material.icons.filled.VerticalAlignTop
@@ -348,6 +350,30 @@ fun MainBottomBar(
                     if (tabIndex == 0) {
                         val navRow = readerBottomNavBridge
                         if (navRow != null) {
+                            if (navRow.showParagraphSplitEditBar) {
+                                IconButton(onClick = { navRow.onReaderKeyboardForceHiddenToggle() }) {
+                                    Icon(
+                                        imageVector =
+                                            if (navRow.readerKeyboardForceHidden) {
+                                                Icons.Outlined.KeyboardHide
+                                            } else {
+                                                Icons.Outlined.Keyboard
+                                            },
+                                        contentDescription =
+                                            if (navRow.readerKeyboardForceHidden) {
+                                                "Đang luôn ẩn bàn phím — bấm để cho phép hiện"
+                                            } else {
+                                                "Luôn ẩn bàn phím — bấm để bật"
+                                            },
+                                        tint =
+                                            if (navRow.readerKeyboardForceHidden) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
+                                    )
+                                }
+                            }
                             if (navRow.showPasteAndCaretStep) {
                                 IconButton(onClick = { navRow.pasteFromClipboard() }) {
                                     Icon(

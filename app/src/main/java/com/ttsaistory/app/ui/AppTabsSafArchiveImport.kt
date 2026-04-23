@@ -43,7 +43,8 @@ internal suspend fun importOpenedZipArchiveFromSaf(
     pickedUri: Uri,
     resolvedDisplayName: String?,
     logBridge: OpenFileProgressLogBridge,
-    onFinishedGoToLibraryTab: () -> Unit,
+    /** [categoryId] của thể loại vừa nhập — để mở chương đầu trong thể loại. */
+    onFinishedArchiveImport: (categoryId: Long) -> Unit,
 ) {
     logBridge.postUpdate {
         it?.copy(
@@ -51,7 +52,8 @@ internal suspend fun importOpenedZipArchiveFromSaf(
             progressCompleted = false,
         )
     }
-    withContext(Dispatchers.IO) {
+    val importCategoryId =
+        withContext(Dispatchers.IO) {
         val catName =
             safeCategoryNameFromZipDisplayName(
                 resolvedDisplayName ?: "archive.zip",
@@ -61,6 +63,7 @@ internal suspend fun importOpenedZipArchiveFromSaf(
         val extractRootCanon = extractRoot.canonicalFile
         val usedTitles = mutableSetOf<String>()
         val importedStoryCount = AtomicInteger(0)
+        val extractedFiles = mutableListOf<Pair<String, File>>()
         coroutineScope {
             val importQueue = Channel<Pair<String, File>>(Channel.UNLIMITED)
             val importWorker =
@@ -98,11 +101,15 @@ internal suspend fun importOpenedZipArchiveFromSaf(
                     onFileExtracted = { _, entryName ->
                         val label = entryName.trim()
                         val file = File(extractRoot, entryName)
-                        check(importQueue.trySend(label to file).isSuccess) {
-                            "Không đưa được file vào hàng đợi nhập"
-                        }
+                        extractedFiles.add(label to file)
                     },
                 )
+                extractedFiles.sortBy { it.first }
+                for (pair in extractedFiles) {
+                    check(importQueue.trySend(pair).isSuccess) {
+                        "Không đưa được file vào hàng đợi nhập"
+                    }
+                }
             } finally {
                 importQueue.close()
             }
@@ -116,9 +123,10 @@ internal suspend fun importOpenedZipArchiveFromSaf(
             categoryId,
             Uri.fromFile(extractRoot.canonicalFile).toString(),
         )
+        categoryId
     }
     logBridge.postClear()
-    onFinishedGoToLibraryTab()
+    onFinishedArchiveImport(importCategoryId)
 }
 
 internal suspend fun importOpenedEpubArchiveFromSaf(
@@ -127,7 +135,7 @@ internal suspend fun importOpenedEpubArchiveFromSaf(
     pickedUri: Uri,
     resolvedDisplayName: String?,
     logBridge: OpenFileProgressLogBridge,
-    onFinishedGoToLibraryTab: () -> Unit,
+    onFinishedArchiveImport: (categoryId: Long) -> Unit,
 ) {
     logBridge.postUpdate {
         it?.copy(
@@ -135,7 +143,7 @@ internal suspend fun importOpenedEpubArchiveFromSaf(
             progressCompleted = false,
         )
     }
-    val (epubCategoryName, importedCount) =
+    val (epubCategoryName, importedCount, epubCategoryId) =
         withContext(Dispatchers.IO) {
             val catName =
                 safeCategoryNameFromEpubDisplayName(
@@ -216,7 +224,7 @@ internal suspend fun importOpenedEpubArchiveFromSaf(
                 categoryId,
                 Uri.fromFile(extractRoot.canonicalFile).toString(),
             )
-            catName to importedStoryCount.get()
+            Triple(catName, importedStoryCount.get(), categoryId)
         }
     Toast.makeText(
         activity,
@@ -224,7 +232,7 @@ internal suspend fun importOpenedEpubArchiveFromSaf(
         Toast.LENGTH_LONG,
     ).show()
     logBridge.postClear()
-    onFinishedGoToLibraryTab()
+    onFinishedArchiveImport(epubCategoryId)
 }
 
 internal suspend fun importOpenedPdfArchiveFromSaf(
@@ -233,7 +241,7 @@ internal suspend fun importOpenedPdfArchiveFromSaf(
     pickedUri: Uri,
     resolvedDisplayName: String?,
     logBridge: OpenFileProgressLogBridge,
-    onFinishedGoToLibraryTab: () -> Unit,
+    onFinishedArchiveImport: (categoryId: Long) -> Unit,
 ) {
     logBridge.postUpdate {
         it?.copy(
@@ -241,7 +249,7 @@ internal suspend fun importOpenedPdfArchiveFromSaf(
             progressCompleted = false,
         )
     }
-    val (pdfCategoryName, importedCount) =
+    val (pdfCategoryName, importedCount, pdfCategoryId) =
         withContext(Dispatchers.IO) {
             val catName =
                 safeCategoryNameFromPdfDisplayName(
@@ -320,7 +328,7 @@ internal suspend fun importOpenedPdfArchiveFromSaf(
                 categoryId,
                 Uri.fromFile(extractRoot.canonicalFile).toString(),
             )
-            catName to importedStoryCount.get()
+            Triple(catName, importedStoryCount.get(), categoryId)
         }
     Toast.makeText(
         activity,
@@ -328,5 +336,5 @@ internal suspend fun importOpenedPdfArchiveFromSaf(
         Toast.LENGTH_LONG,
     ).show()
     logBridge.postClear()
-    onFinishedGoToLibraryTab()
+    onFinishedArchiveImport(pdfCategoryId)
 }

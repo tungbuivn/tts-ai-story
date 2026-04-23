@@ -99,6 +99,91 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * Mở một truyện thư viện theo id (đọc file, bookmark, tab Văn bản).
+ * Dùng chung cho mở từ thư viện và sau khi nhập ZIP/EPUB/PDF.
+ * @return false nếu không mở được (đã khôi phục [active] khi đọc file lỗi)
+ */
+private suspend fun openLibraryStoryByIdForMainTabs(
+    context: Context,
+    storyLibrary: StoryLibraryRepository,
+    storyId: Long,
+    previousActiveLibraryStoryId: Long?,
+    stopAllSpeechReading: () -> Unit,
+    setActiveLibraryStoryId: (Long?) -> Unit,
+    setText: (String) -> Unit,
+    prefs: SharedPreferences,
+    bumpLibraryRefresh: () -> Unit,
+    bumpLibrarySyncEpoch: () -> Unit,
+    onSwitchToTextTab: () -> Unit,
+): Boolean {
+    stopAllSpeechReading()
+    val rowForRefresh =
+        withContext(Dispatchers.IO) {
+            storyLibrary.getStory(storyId)
+        }
+    if (rowForRefresh == null) {
+        Toast.makeText(
+            context,
+            "Không tìm thấy truyện trong thư viện.",
+            Toast.LENGTH_SHORT,
+        ).show()
+        return false
+    }
+    setActiveLibraryStoryId(storyId)
+    if (storyLibrary.storyNeedsOnlineContentRefresh(rowForRefresh)) {
+        try {
+            OnlineCategoryHeadlessStoryTextSync.syncOnlineStoryFromWebPage(
+                context = context,
+                storyId = storyId,
+                repository = storyLibrary,
+            )
+            bumpLibraryRefresh()
+        } catch (e: Exception) {
+            Toast.makeText(
+                context,
+                e.message ?: "Không tải được nội dung từ web",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+    val body =
+        withContext(Dispatchers.IO) {
+            storyLibrary.readStoryText(storyId)
+        }
+    if (body == null) {
+        Toast.makeText(
+            context,
+            "Không đọc được file truyện.",
+            Toast.LENGTH_LONG,
+        ).show()
+        setActiveLibraryStoryId(previousActiveLibraryStoryId)
+        return false
+    }
+    val row =
+        withContext(Dispatchers.IO) {
+            storyLibrary.getStory(storyId)
+        }
+    val cleaned = canonicalTextFromRaw(body)
+    setText(cleaned)
+    prefs.saveLastText(cleaned)
+    val savedIdx = row?.lastSpeechSentenceIndex ?: -1
+    prefs
+        .edit()
+        .putLastReadingBookmark(savedIdx, storyId)
+        .commit()
+    bumpLibrarySyncEpoch()
+    val insertedNextPlaceholder =
+        withContext(Dispatchers.IO) {
+            storyLibrary.ensurePlaceholderStoryForStoredOnlineNextPageUrl(storyId)
+        }
+    if (insertedNextPlaceholder) {
+        bumpLibraryRefresh()
+    }
+    onSwitchToTextTab()
+    return true
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppTabs() {
@@ -157,6 +242,13 @@ fun AppTabs() {
             getLog = { openFileProgressLog },
             setLog = { openFileProgressLog = it },
         )
+    /** Gán trong [SideEffect] sau [stopAllSpeechReading] — launcher SAF được khai báo trước trong file. */
+    val archiveImportCategoryDoneHandler =
+        remember {
+            object {
+                var consume: (Long) -> Unit = {}
+            }
+        }
     val latestActiveLibraryStoryId by rememberUpdatedState(activeLibraryStoryId)
     val latestTextForLibraryAutosave by rememberUpdatedState(text)
     val latestLibraryStoryId by rememberUpdatedState(activeLibraryStoryId)
@@ -224,11 +316,6 @@ fun AppTabs() {
                 if (uri == null) return@rememberLauncherForActivityResult
                 coroutineScope.launch {
                     try {
-                        fun goToLibraryAfterSafImport() {
-                            libraryRefreshTrigger++
-                            tabIndex = 1
-                        }
-
                         libraryFileAutosaveHolder.job?.cancel()
                         libraryFileAutosaveHolder.job = null
                         paragraphDraftFlush?.invoke()
@@ -261,7 +348,7 @@ fun AppTabs() {
                                 uri,
                                 displayName,
                                 safArchiveImportLogBridge,
-                                onFinishedGoToLibraryTab = ::goToLibraryAfterSafImport,
+                                onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
                             )
                             return@launch
                         }
@@ -272,7 +359,7 @@ fun AppTabs() {
                                 uri,
                                 displayName,
                                 safArchiveImportLogBridge,
-                                onFinishedGoToLibraryTab = ::goToLibraryAfterSafImport,
+                                onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
                             )
                             return@launch
                         }
@@ -283,7 +370,7 @@ fun AppTabs() {
                                 uri,
                                 displayName,
                                 safArchiveImportLogBridge,
-                                onFinishedGoToLibraryTab = ::goToLibraryAfterSafImport,
+                                onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
                             )
                             return@launch
                         }
@@ -637,10 +724,7 @@ fun AppTabs() {
                             streamUri,
                             sendDisplayName,
                             safArchiveImportLogBridge,
-                            onFinishedGoToLibraryTab = {
-                                libraryRefreshTrigger++
-                                tabIndex = 1
-                            },
+                            onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
                         )
                         return@launch
                     }
@@ -719,10 +803,7 @@ fun AppTabs() {
                             uri,
                             viewDisplayName,
                             safArchiveImportLogBridge,
-                            onFinishedGoToLibraryTab = {
-                                libraryRefreshTrigger++
-                                tabIndex = 1
-                            },
+                            onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
                         )
                     } catch (e: CancellationException) {
                         throw e
@@ -755,10 +836,7 @@ fun AppTabs() {
                             uri,
                             viewDisplayName,
                             safArchiveImportLogBridge,
-                            onFinishedGoToLibraryTab = {
-                                libraryRefreshTrigger++
-                                tabIndex = 1
-                            },
+                            onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
                         )
                     } catch (e: CancellationException) {
                         throw e
@@ -790,10 +868,7 @@ fun AppTabs() {
                             uri,
                             viewDisplayName,
                             safArchiveImportLogBridge,
-                            onFinishedGoToLibraryTab = {
-                                libraryRefreshTrigger++
-                                tabIndex = 1
-                            },
+                            onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
                         )
                     } catch (e: CancellationException) {
                         throw e
@@ -1127,6 +1202,39 @@ fun AppTabs() {
 
     SideEffect {
         stopAllSpeechReadingRef.value = { persist -> stopAllSpeechReading(persist) }
+        archiveImportCategoryDoneHandler.consume = { categoryId ->
+            coroutineScope.launch {
+                libraryRefreshTrigger++
+                val firstId =
+                    withContext(Dispatchers.IO) {
+                        storyLibrary.listStories(categoryId).firstOrNull()?.id
+                    }
+                if (firstId == null) {
+                    tabIndex = 1
+                    return@launch
+                }
+                val prev = activeLibraryStoryId
+                val ok =
+                    openLibraryStoryByIdForMainTabs(
+                        context = context,
+                        storyLibrary = storyLibrary,
+                        storyId = firstId,
+                        previousActiveLibraryStoryId = prev,
+                        stopAllSpeechReading = {
+                            stopAllSpeechReadingRef.value?.invoke(true)
+                        },
+                        setActiveLibraryStoryId = { activeLibraryStoryId = it },
+                        setText = { text = it },
+                        prefs = prefs,
+                        bumpLibraryRefresh = { libraryRefreshTrigger++ },
+                        bumpLibrarySyncEpoch = { librarySyncEpoch++ },
+                        onSwitchToTextTab = { tabIndex = 0 },
+                    )
+                if (!ok) {
+                    tabIndex = 1
+                }
+            }
+        }
     }
 
     DisposableEffect(Unit) {
@@ -1404,71 +1512,19 @@ fun AppTabs() {
             onOpenStoryFromLibrary = { storyId ->
                 coroutineScope.launch {
                     val previousActiveLibraryStoryId = activeLibraryStoryId
-                    stopAllSpeechReading()
-                    val rowForRefresh =
-                        withContext(Dispatchers.IO) {
-                            storyLibrary.getStory(storyId)
-                        }
-                    if (rowForRefresh == null) {
-                        Toast.makeText(
-                            context,
-                            "Không tìm thấy truyện trong thư viện.",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                        return@launch
-                    }
-                    // Gán sớm để UI (vd. bảng chọn truyện) không còn trỏ tới bản ghi đã xóa trong lúc đọc file.
-                    activeLibraryStoryId = storyId
-                    if (storyLibrary.storyNeedsOnlineContentRefresh(rowForRefresh)) {
-                        try {
-                            OnlineCategoryHeadlessStoryTextSync.syncOnlineStoryFromWebPage(
-                                context = context,
-                                storyId = storyId,
-                                repository = storyLibrary,
-                            )
-                            libraryRefreshTrigger++
-                        } catch (e: Exception) {
-                            Toast.makeText(
-                                context,
-                                e.message ?: "Không tải được nội dung từ web",
-                                Toast.LENGTH_LONG,
-                            ).show()
-                        }
-                    }
-                    val body =
-                        withContext(Dispatchers.IO) {
-                            storyLibrary.readStoryText(storyId)
-                        }
-                    if (body == null) {
-                        Toast.makeText(
-                            context,
-                            "Không đọc được file truyện.",
-                            Toast.LENGTH_LONG,
-                        ).show()
-                        activeLibraryStoryId = previousActiveLibraryStoryId
-                        return@launch
-                    }
-                    val row =
-                        withContext(Dispatchers.IO) {
-                            storyLibrary.getStory(storyId)
-                        }
-                    val cleaned = canonicalTextFromRaw(body)
-                    text = cleaned
-                    prefs.saveLastText(cleaned)
-                    val savedIdx = row?.lastSpeechSentenceIndex ?: -1
-                    prefs
-                        .edit()
-                        .putLastReadingBookmark(savedIdx, storyId)
-                        .commit()
-                    librarySyncEpoch++
-                    val insertedNextPlaceholder =
-                        withContext(Dispatchers.IO) {
-                            storyLibrary.ensurePlaceholderStoryForStoredOnlineNextPageUrl(storyId)
-                        }
-                    if (insertedNextPlaceholder) {
-                        libraryRefreshTrigger++
-                    }
-                    tabIndex = 0
+                    openLibraryStoryByIdForMainTabs(
+                        context = context,
+                        storyLibrary = storyLibrary,
+                        storyId = storyId,
+                        previousActiveLibraryStoryId = previousActiveLibraryStoryId,
+                        stopAllSpeechReading = { stopAllSpeechReading() },
+                        setActiveLibraryStoryId = { activeLibraryStoryId = it },
+                        setText = { text = it },
+                        prefs = prefs,
+                        bumpLibraryRefresh = { libraryRefreshTrigger++ },
+                        bumpLibrarySyncEpoch = { librarySyncEpoch++ },
+                        onSwitchToTextTab = { tabIndex = 0 },
+                    )
                 }
             },
             onOpenTextFileFromStorage = {

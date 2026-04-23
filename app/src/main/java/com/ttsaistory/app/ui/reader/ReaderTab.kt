@@ -1,5 +1,6 @@
 package com.ttsaistory.app.ui.reader
 
+import android.app.Activity
 import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
@@ -14,6 +15,8 @@ import android.text.TextWatcher
 import android.graphics.Typeface
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.inputmethod.InputMethodManager
+import android.view.WindowManager
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.View
 import android.widget.EditText
@@ -234,6 +237,41 @@ fun ReaderTab(
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    var readerKeyboardForceHidden by remember {
+        mutableStateOf(
+            prefs.getBoolean(AppPreferenceKeys.KEY_READER_FORCE_HIDE_SOFT_KEYBOARD, false),
+        )
+    }
+    DisposableEffect(readerKeyboardForceHidden) {
+        val act = ctx as? Activity
+        val window = act?.window
+        if (window != null && readerKeyboardForceHidden) {
+            window.setSoftInputMode(
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
+                    WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,
+            )
+        }
+        onDispose {
+            window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        }
+    }
+    fun hideSoftInputWhenReaderForceHidden() {
+        if (!readerKeyboardForceHidden) return
+        keyboardController?.hide()
+        val act = ctx as? Activity ?: return
+        val imm =
+            act.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+        val token = act.window?.decorView?.windowToken ?: return
+        imm.hideSoftInputFromWindow(token, 0)
+        scope.launch {
+            delay(20)
+            keyboardController?.hide()
+            imm.hideSoftInputFromWindow(token, 0)
+            delay(80)
+            keyboardController?.hide()
+            imm.hideSoftInputFromWindow(token, 0)
+        }
+    }
     val textTabToolbarScrollState = rememberScrollState()
     val fullTextScrollState = rememberScrollState()
     val fullTextFocusRequester = remember { FocusRequester() }
@@ -954,6 +992,7 @@ fun ReaderTab(
                 webPrefetchChapterQueueLines.size,
                 activeStoryHasWebUrl,
                 webStoryQueueTargetStoryId?.toString() ?: "null",
+                readerKeyboardForceHidden,
             ).joinToString("|")
         if (bottomNavPublishKey == lastBottomNavPublishKey) {
             return@SideEffect
@@ -983,6 +1022,18 @@ fun ReaderTab(
                 onParagraphSplitEditJoinUp = { paragraphSplitEditSink.joinUp() },
                 onParagraphSplitEditSplitAtCaret = { paragraphSplitEditSink.splitAtCaret() },
                 onParagraphSplitEditDelete = { paragraphSplitEditSink.deleteCell() },
+                readerKeyboardForceHidden = readerKeyboardForceHidden,
+                onReaderKeyboardForceHiddenToggle = {
+                    readerKeyboardForceHidden = !readerKeyboardForceHidden
+                    prefs
+                        .edit()
+                        .putBoolean(
+                            AppPreferenceKeys.KEY_READER_FORCE_HIDE_SOFT_KEYBOARD,
+                            readerKeyboardForceHidden,
+                        )
+                        .apply()
+                    hideSoftInputWhenReaderForceHidden()
+                },
                 paragraphFocusSliderMax = (flatItemCount - 1).coerceAtLeast(0),
                 paragraphFocusSliderValue =
                     focusedParagraphIndex.coerceIn(0, (flatItemCount - 1).coerceAtLeast(0)),
@@ -2252,6 +2303,7 @@ fun ReaderTab(
                         paragraphFocusRequestToken,
                         textEditorChromeViewOnly,
                         flatIdx,
+                        readerKeyboardForceHidden,
                     ) {
                         if (!paragraphSplitMode || flatItemCount <= 0) return@LaunchedEffect
                         if (focusedParagraphIndex != flatIdx) return@LaunchedEffect
@@ -2260,6 +2312,7 @@ fun ReaderTab(
                         } catch (_: IllegalStateException) {
                         } catch (_: IllegalArgumentException) {
                         }
+                        hideSoftInputWhenReaderForceHidden()
                     }
                     val cellParagraphInteractionSource = remember { MutableInteractionSource() }
                     // Chỉ ô đang focus lắng nghe interaction — tránh N coroutine collect trên danh sách dài.
@@ -2428,6 +2481,7 @@ fun ReaderTab(
                                                                 latestParagraphFieldGroups,
                                                                 flatIdx,
                                                             )
+                                                            hideSoftInputWhenReaderForceHidden()
                                                         }
                                                     }
                                                     .onPreviewKeyEvent { ev ->

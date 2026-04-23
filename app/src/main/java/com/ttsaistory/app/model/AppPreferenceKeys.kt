@@ -19,6 +19,12 @@ object AppPreferenceKeys {
     const val KEY_SYSTEM_TTS_SAMPLE_TEXT = "system_tts_sample_text"
     const val KEY_ACTIVE_LIBRARY_STORY_ID = "active_library_story_id"
 
+    /**
+     * Tab Text: khi `true`, luôn ẩn bàn phím mềm (SOFT_INPUT_STATE_ALWAYS_HIDDEN).
+     * Mặc định nếu chưa lưu pref: `false` — bàn phím hiện bình thường.
+     */
+    const val KEY_READER_FORCE_HIDE_SOFT_KEYBOARD = "reader_force_hide_soft_keyboard"
+
     const val DEFAULT_EDITOR_FONT_SCAN_DIR = "/storage/emulated/0/fonts"
 
     const val KEY_EDITOR_FONT_SCAN_DIR = "editor_font_scan_dir"

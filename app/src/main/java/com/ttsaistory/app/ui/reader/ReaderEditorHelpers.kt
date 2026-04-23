@@ -82,6 +82,9 @@ data class ReaderBottomNavBridge(
     val onParagraphSplitEditJoinUp: () -> Unit = {},
     val onParagraphSplitEditSplitAtCaret: () -> Unit = {},
     val onParagraphSplitEditDelete: () -> Unit = {},
+    /** Luôn ẩn IME khi đang tab Text; bật/tắt qua bottom bar, lưu prefs. */
+    val readerKeyboardForceHidden: Boolean = false,
+    val onReaderKeyboardForceHiddenToggle: () -> Unit = {},
     val paragraphFocusSliderMax: Int,
     val paragraphFocusSliderValue: Int,
     val onParagraphFocusSliderChange: (Int) -> Unit,
