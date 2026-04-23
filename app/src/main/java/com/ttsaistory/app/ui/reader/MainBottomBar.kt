@@ -300,9 +300,9 @@ fun MainBottomBar(
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text =
-                                    "Hàng đợi TTS: ${systemTtsQueuedParagraphUtterances} câu",
+                                    "Hàng đợi TTS: ${systemTtsQueuedParagraphUtterances}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
+                                // color = MaterialTheme.colorScheme.primary,
                             )
                         }
                     }

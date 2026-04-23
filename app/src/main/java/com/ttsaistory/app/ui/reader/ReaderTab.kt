@@ -289,58 +289,6 @@ fun ReaderTab(
             pendingPostNotifExport.value = null
         }
 
-    fun enqueueTtsExport(exportBody: String) {
-        val run: () -> Unit = {
-            scope.launch(Dispatchers.IO) {
-                val bodyFile =
-                    File(ctx.cacheDir, "tts_export_body_${System.currentTimeMillis()}.txt")
-                try {
-                    bodyFile.writeText(exportBody, Charsets.UTF_8)
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(
-                            ctx,
-                            "Lỗi ghi file tạm: ${e.message ?: e.javaClass.simpleName}",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                    return@launch
-                }
-                withContext(Dispatchers.Main) {
-                    val out = "tts_story_${System.currentTimeMillis()}.m4a"
-                    val i =
-                        Intent(ctx, TtsAudioExportForegroundService::class.java).apply {
-                            action = TtsAudioExportForegroundService.ACTION_START
-                            putExtra(
-                                TtsAudioExportForegroundService.EXTRA_BODY_PATH,
-                                bodyFile.absolutePath,
-                            )
-                            putExtra(TtsAudioExportForegroundService.EXTRA_OUTPUT_NAME, out)
-                            putExtra(TtsAudioExportForegroundService.EXTRA_SPEECH_RATE, systemTtsSpeechRate)
-                            putExtra(TtsAudioExportForegroundService.EXTRA_PITCH, systemTtsPitch)
-                            tts?.voice?.let { v ->
-                                putExtra(TtsAudioExportForegroundService.EXTRA_VOICE_NAME, v.name)
-                                putExtra(
-                                    TtsAudioExportForegroundService.EXTRA_VOICE_LOCALE,
-                                    v.locale?.toLanguageTag(),
-                                )
-                            }
-                        }
-                    ContextCompat.startForegroundService(ctx, i)
-                }
-            }
-        }
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            pendingPostNotifExport.value = run
-            postNotifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            run()
-        }
-    }
-
     var showNewLibraryStoryDialog by remember { mutableStateOf(false) }
     var newStoryNewCategoryName by remember { mutableStateOf("") }
     var newStorySelectedCategoryId by remember { mutableStateOf<Long?>(null) }
@@ -601,6 +549,73 @@ fun ReaderTab(
         if (merged != text) onTextChange(merged)
     }
 
+    fun enqueueTtsExport() {
+        val run: () -> Unit = {
+            scope.launch {
+                val exportBody =
+                    ParagraphTextService.lastCachedFlatSentencesForAacExport()
+                        ?.joinToString("\n")
+                        .orEmpty()
+                if (exportBody.isBlank()) {
+                    Toast.makeText(
+                        ctx,
+                        "Không có nội dung để xuất",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    return@launch
+                }
+                val bodyFile =
+                    withContext(Dispatchers.IO) {
+                        val f =
+                            File(ctx.cacheDir, "tts_export_body_${System.currentTimeMillis()}.txt")
+                        try {
+                            f.writeText(exportBody, Charsets.UTF_8)
+                            f
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(
+                                    ctx,
+                                    "Lỗi ghi file tạm: ${e.message ?: e.javaClass.simpleName}",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                            null
+                        }
+                    }
+                if (bodyFile == null) return@launch
+                val out = "tts_story_${System.currentTimeMillis()}.m4a"
+                val i =
+                    Intent(ctx, TtsAudioExportForegroundService::class.java).apply {
+                        action = TtsAudioExportForegroundService.ACTION_START
+                        putExtra(
+                            TtsAudioExportForegroundService.EXTRA_BODY_PATH,
+                            bodyFile.absolutePath,
+                        )
+                        putExtra(TtsAudioExportForegroundService.EXTRA_OUTPUT_NAME, out)
+                        putExtra(TtsAudioExportForegroundService.EXTRA_SPEECH_RATE, systemTtsSpeechRate)
+                        putExtra(TtsAudioExportForegroundService.EXTRA_PITCH, systemTtsPitch)
+                        tts?.voice?.let { v ->
+                            putExtra(TtsAudioExportForegroundService.EXTRA_VOICE_NAME, v.name)
+                            putExtra(
+                                TtsAudioExportForegroundService.EXTRA_VOICE_LOCALE,
+                                v.locale?.toLanguageTag(),
+                            )
+                        }
+                    }
+                ContextCompat.startForegroundService(ctx, i)
+            }
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingPostNotifExport.value = run
+            postNotifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            run()
+        }
+    }
+
     fun switchToolbarToFullTextMode() {
         if (paragraphSplitMode) {
             flushParagraphParentPersist()
@@ -706,17 +721,7 @@ fun ReaderTab(
     SideEffect {
         onRegisterExportM4aForTopBar?.invoke(
             ExportM4aTopBarState(
-                onClick = {
-                    if (paragraphSplitMode) flushParagraphParentPersist()
-                    val bodyForExport =
-                        if (paragraphSplitMode) mergedParagraphFields() else text
-                    ParagraphTextService.parseStoredTextToParagraphGroups(bodyForExport)
-                    val exportBody =
-                        ParagraphTextService.lastCachedFlatSentencesForAacExport()
-                            ?.joinToString("\n")
-                            ?: bodyForExport
-                    enqueueTtsExport(exportBody)
-                },
+                onClick = { enqueueTtsExport() },
                 enabled =
                     exportUiFromCoordinator == null &&
                         (paragraphToolbarTtsTotal ?: 0) > 0,
