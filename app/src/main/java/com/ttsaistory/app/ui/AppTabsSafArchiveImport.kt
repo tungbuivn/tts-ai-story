@@ -228,7 +228,7 @@ internal suspend fun importOpenedEpubArchiveFromSaf(
         }
     Toast.makeText(
         activity,
-        "Đã import $importedCount chương EPUB vào thể loại \"$epubCategoryName\".",
+        "Đã import $importedCount chương EPUB vào truyện «$epubCategoryName».",
         Toast.LENGTH_LONG,
     ).show()
     logBridge.postClear()
@@ -332,7 +332,7 @@ internal suspend fun importOpenedPdfArchiveFromSaf(
         }
     Toast.makeText(
         activity,
-        "Đã import $importedCount trang PDF vào thể loại \"$pdfCategoryName\".",
+        "Đã import $importedCount trang PDF vào truyện «$pdfCategoryName».",
         Toast.LENGTH_LONG,
     ).show()
     logBridge.postClear()

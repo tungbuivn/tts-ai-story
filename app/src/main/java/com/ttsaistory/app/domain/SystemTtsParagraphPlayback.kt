@@ -50,6 +50,13 @@ fun speakParagraphUtterance(
  * Đọc từ paragraph [startIndex] đến hết; utteranceId = index gốc để highlight đúng ô.
  * @return cặp (thành công, số utterance đã queue) — dùng số utterance để biết khi nào đọc hết loạt.
  */
+/** Đếm từ (khoảng trắng) cho ước lượng từ/phút khi phát TTS — đồng bộ với nội dung đã sanitize gửi engine. */
+fun wordCountForTtsPlaybackWpm(text: String): Int {
+    val t = text.trim()
+    if (t.isEmpty()) return 0
+    return t.split(Regex("\\s+")).count { it.isNotEmpty() }
+}
+
 fun speakParagraphsSequential(
     tts: TextToSpeech?,
     paragraphs: List<String>,

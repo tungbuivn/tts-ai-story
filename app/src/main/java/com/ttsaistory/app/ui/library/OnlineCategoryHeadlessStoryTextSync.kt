@@ -30,7 +30,7 @@ object OnlineCategoryHeadlessStoryTextSync {
         val firstStoryId =
             withContext(Dispatchers.IO) {
                 repository.listStories(categoryId).firstOrNull()?.id
-            } ?: error("Chưa có truyện trong thể loại")
+            } ?: error("Chưa có chương trong truyện")
         syncOnlineStoryContentFromWebView(
             context = context,
             storyId = firstStoryId,
@@ -49,7 +49,7 @@ object OnlineCategoryHeadlessStoryTextSync {
         val row =
             withContext(Dispatchers.IO) {
                 repository.getStory(storyId)
-            } ?: error("Không tìm thấy truyện")
+            } ?: error("Không tìm thấy chương")
         val url =
             row.onlinePageUrl?.trim()?.takeIf { it.isNotEmpty() }
                 ?: error("Truyện không có online_page_url")

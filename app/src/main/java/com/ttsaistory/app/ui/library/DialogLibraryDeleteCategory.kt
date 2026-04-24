@@ -15,9 +15,9 @@ internal fun DialogLibraryDeleteCategory(
     AppAlertDialog(
         tone = DialogSemanticTone.Error,
         onDismissRequest = onDismissRequest,
-        title = { Text("Xóa thể loại?") },
+        title = { Text("Xóa truyện?") },
         text = {
-            Text("Xóa \"$categoryName\" và mọi truyện trong đó (file trên đĩa).")
+            Text("Xóa \"$categoryName\" và mọi chương trong đó (file trên đĩa).")
         },
         confirmButton = {
             Button(onClick = onConfirmDelete) {

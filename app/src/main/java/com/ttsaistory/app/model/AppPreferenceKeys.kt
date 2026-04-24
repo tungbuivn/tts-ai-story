@@ -25,6 +25,14 @@ object AppPreferenceKeys {
      */
     const val KEY_READER_FORCE_HIDE_SOFT_KEYBOARD = "reader_force_hide_soft_keyboard"
 
+    /** Khoảng chờ (ms) trước lần ẩn IME lặp 1 sau focus / đổi ô — [hideSoftInputWhenReaderForceHidden]. */
+    const val KEY_READER_IME_HIDE_DELAY_FIRST_MS = "reader_ime_hide_delay_first_ms"
+    /** Khoảng chờ (ms) trước lần ẩn IME lặp 2. */
+    const val KEY_READER_IME_HIDE_DELAY_SECOND_MS = "reader_ime_hide_delay_second_ms"
+
+    const val DEFAULT_READER_IME_HIDE_DELAY_FIRST_MS = 20
+    const val DEFAULT_READER_IME_HIDE_DELAY_SECOND_MS = 80
+
     const val DEFAULT_EDITOR_FONT_SCAN_DIR = "/storage/emulated/0/fonts"
 
     const val KEY_EDITOR_FONT_SCAN_DIR = "editor_font_scan_dir"

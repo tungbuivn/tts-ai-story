@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.SystemClock
 import android.os.PowerManager
 import android.os.Looper
 import android.speech.tts.TextToSpeech
@@ -33,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -50,12 +52,15 @@ import com.ttsaistory.app.MainActivity
 import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.elevenlabs.ElevenLabsPrefKeys
 import com.ttsaistory.app.elevenlabs.ElevenLabsSettingsScreen
+import com.ttsaistory.app.domain.copyPickedDocumentToDownloadsTtsAiStoryFolder
 import com.ttsaistory.app.domain.canonicalTextFromRaw
 import com.ttsaistory.app.domain.documentTreeDisplayName
 import com.ttsaistory.app.domain.fetchUrlAsPlainText
 import com.ttsaistory.app.domain.isVietnameseTtsVoice
 import com.ttsaistory.app.domain.parseHttpUrlFromSharedText
+import com.ttsaistory.app.domain.buildParagraphSpeakJobs
 import com.ttsaistory.app.domain.parseTtsParagraphIndex
+import com.ttsaistory.app.domain.wordCountForTtsPlaybackWpm
 import com.ttsaistory.app.domain.persistInboundSharedTextToLibrary
 import com.ttsaistory.app.domain.persistOpenedTextFileToLibrary
 import com.ttsaistory.app.domain.readSendStreamAsText
@@ -125,7 +130,7 @@ private suspend fun openLibraryStoryByIdForMainTabs(
     if (rowForRefresh == null) {
         Toast.makeText(
             context,
-            "Không tìm thấy truyện trong thư viện.",
+            "Không tìm thấy chương trong thư viện.",
             Toast.LENGTH_SHORT,
         ).show()
         return false
@@ -154,7 +159,7 @@ private suspend fun openLibraryStoryByIdForMainTabs(
     if (body == null) {
         Toast.makeText(
             context,
-            "Không đọc được file truyện.",
+            "Không đọc được file chương.",
             Toast.LENGTH_LONG,
         ).show()
         setActiveLibraryStoryId(previousActiveLibraryStoryId)
@@ -339,35 +344,58 @@ fun AppTabs() {
                         openFileProgressLog =
                             OpenFileProgressLogUi(
                                 displayName = displayName?.trim()?.takeIf { it.isNotEmpty() },
-                                message = "Đang xử lý…",
+                                message = "Đang sao chép vào Download/tts-ai-story…",
                             )
-                        if (uriLooksLikeEpubArchive(activity, uri, displayName)) {
+                        val stagedUri =
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    copyPickedDocumentToDownloadsTtsAiStoryFolder(
+                                        activity,
+                                        uri,
+                                        displayName,
+                                    )
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                openFileProgressLog = null
+                                importProgressMainHandler.post { openFileProgressLog = null }
+                                Toast.makeText(
+                                    activity,
+                                    e.message ?: "Không sao chép được file vào Downloads",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                return@launch
+                            }
+                        openFileProgressLog =
+                            openFileProgressLog?.copy(message = "Đang xử lý…")
+                        if (uriLooksLikeEpubArchive(activity, stagedUri, displayName)) {
                             importOpenedEpubArchiveFromSaf(
                                 activity,
                                 storyLibrary,
-                                uri,
+                                stagedUri,
                                 displayName,
                                 safArchiveImportLogBridge,
                                 onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
                             )
                             return@launch
                         }
-                        if (uriLooksLikePdf(activity, uri, displayName)) {
+                        if (uriLooksLikePdf(activity, stagedUri, displayName)) {
                             importOpenedPdfArchiveFromSaf(
                                 activity,
                                 storyLibrary,
-                                uri,
+                                stagedUri,
                                 displayName,
                                 safArchiveImportLogBridge,
                                 onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
                             )
                             return@launch
                         }
-                        if (uriLooksLikeZipArchive(activity, uri, displayName)) {
+                        if (uriLooksLikeZipArchive(activity, stagedUri, displayName)) {
                             importOpenedZipArchiveFromSaf(
                                 activity,
                                 storyLibrary,
-                                uri,
+                                stagedUri,
                                 displayName,
                                 safArchiveImportLogBridge,
                                 onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
@@ -378,7 +406,7 @@ fun AppTabs() {
                         try {
                             val raw =
                                 withContext(Dispatchers.IO) {
-                                    readSendStreamAsText(activity, uri)
+                                    readSendStreamAsText(activity, stagedUri)
                                 }
                             if (raw == null) {
                                 openFileProgressLog = null
@@ -477,7 +505,7 @@ fun AppTabs() {
                     postLibraryFolderImportProgress(null)
                     Toast.makeText(
                         activity,
-                        "Đã import $importedCount truyện (mỗi file một truyện) vào thể loại \"$folderName\".",
+                        "Đã import $importedCount chương (mỗi file một chương) vào truyện «$folderName».",
                         Toast.LENGTH_LONG,
                     ).show()
                     libraryRefreshTrigger++
@@ -795,12 +823,22 @@ fun AppTabs() {
                         openFileProgressLog =
                             OpenFileProgressLogUi(
                                 displayName = viewDisplayName?.trim()?.takeIf { it.isNotEmpty() },
-                                message = "Đang xử lý PDF…",
+                                message = "Đang sao chép vào Download/tts-ai-story…",
                             )
+                        val stagedViewPdf =
+                            withContext(Dispatchers.IO) {
+                                copyPickedDocumentToDownloadsTtsAiStoryFolder(
+                                    activity,
+                                    uri,
+                                    viewDisplayName,
+                                )
+                            }
+                        openFileProgressLog =
+                            openFileProgressLog?.copy(message = "Đang xử lý PDF…")
                         importOpenedPdfArchiveFromSaf(
                             activity,
                             storyLibrary,
-                            uri,
+                            stagedViewPdf,
                             viewDisplayName,
                             safArchiveImportLogBridge,
                             onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
@@ -828,12 +866,22 @@ fun AppTabs() {
                         openFileProgressLog =
                             OpenFileProgressLogUi(
                                 displayName = viewDisplayName?.trim()?.takeIf { it.isNotEmpty() },
-                                message = "Đang xử lý EPUB…",
+                                message = "Đang sao chép vào Download/tts-ai-story…",
                             )
+                        val stagedViewEpub =
+                            withContext(Dispatchers.IO) {
+                                copyPickedDocumentToDownloadsTtsAiStoryFolder(
+                                    activity,
+                                    uri,
+                                    viewDisplayName,
+                                )
+                            }
+                        openFileProgressLog =
+                            openFileProgressLog?.copy(message = "Đang xử lý EPUB…")
                         importOpenedEpubArchiveFromSaf(
                             activity,
                             storyLibrary,
-                            uri,
+                            stagedViewEpub,
                             viewDisplayName,
                             safArchiveImportLogBridge,
                             onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
@@ -860,12 +908,22 @@ fun AppTabs() {
                         openFileProgressLog =
                             OpenFileProgressLogUi(
                                 displayName = viewDisplayName?.trim()?.takeIf { it.isNotEmpty() },
-                                message = "Đang xử lý ZIP…",
+                                message = "Đang sao chép vào Download/tts-ai-story…",
                             )
+                        val stagedViewZip =
+                            withContext(Dispatchers.IO) {
+                                copyPickedDocumentToDownloadsTtsAiStoryFolder(
+                                    activity,
+                                    uri,
+                                    viewDisplayName,
+                                )
+                            }
+                        openFileProgressLog =
+                            openFileProgressLog?.copy(message = "Đang xử lý ZIP…")
                         importOpenedZipArchiveFromSaf(
                             activity,
                             storyLibrary,
-                            uri,
+                            stagedViewZip,
                             viewDisplayName,
                             safArchiveImportLogBridge,
                             onFinishedArchiveImport = { archiveImportCategoryDoneHandler.consume(it) },
@@ -889,9 +947,17 @@ fun AppTabs() {
             clearShareIntent()
             coroutineScope.launch {
                 try {
+                    val stagedViewTxt =
+                        withContext(Dispatchers.IO) {
+                            copyPickedDocumentToDownloadsTtsAiStoryFolder(
+                                activity,
+                                uri,
+                                viewDisplayName,
+                            )
+                        }
                     val raw =
                         withContext(Dispatchers.IO) {
-                            readSendStreamAsText(activity, uri)
+                            readSendStreamAsText(activity, stagedViewTxt)
                         }
                     if (raw == null) {
                         Toast.makeText(
@@ -995,6 +1061,14 @@ fun AppTabs() {
     var systemTtsStoryUtterancesRemaining by remember { mutableIntStateOf(0) }
     /** Số utterance TTS hệ thống đang phát (preview, đọc truyện) — dùng giữ màn hình vì [TextToSpeech.isSpeaking] không gây recompose. */
     var systemTtsUtteranceDepth by remember { mutableIntStateOf(0) }
+    /** Nội dung đoạn đang phát (index gốc → văn đã sanitize) để đếm từ khi đo WPM. */
+    var systemTtsWpmOrigToText by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+    /** Tổng thời gian phát các utterance đoạn đã hoàn tất (ms, [SystemClock.elapsedRealtime]). */
+    var systemTtsWpmSpeechMsAccum by remember { mutableLongStateOf(0L) }
+    var systemTtsWpmWordsAccum by remember { mutableIntStateOf(0) }
+    var systemTtsWpmUtteranceStartElapsedMs by remember { mutableStateOf<Long?>(null) }
+    /** Làm mới UI WPM định kỳ khi đang phát. */
+    var systemTtsWpmLiveTick by remember { mutableIntStateOf(0) }
     /** Giữ audio focus khi đọc TTS hệ thống — một số máy tắt màn hình không chuyển đoạn nếu app không có focus. */
     var systemTtsAudioFocusRequest by remember { mutableStateOf<AudioFocusRequest?>(null) }
 
@@ -1188,6 +1262,10 @@ fun AppTabs() {
 
     fun stopAllSpeechReading(persistBookmarkOnStop: Boolean = true) {
         systemTtsStoryUtterancesRemaining = 0
+        systemTtsWpmOrigToText = emptyMap()
+        systemTtsWpmSpeechMsAccum = 0L
+        systemTtsWpmWordsAccum = 0
+        systemTtsWpmUtteranceStartElapsedMs = null
         if (persistBookmarkOnStop) {
             persistBookmarkIfSpeaking()
         }
@@ -1246,6 +1324,13 @@ fun AppTabs() {
 
     fun launchParagraphPlayback(paragraphs: List<String>, startIndex: Int) {
         stopAllSpeechReading(persistBookmarkOnStop = false)
+        if (textTabSpeechEngine == TextTabSpeechEngine.System) {
+            val jobs = buildParagraphSpeakJobs(paragraphs, startIndex)
+            systemTtsWpmOrigToText = jobs.associate { it.first to it.second }
+            systemTtsWpmSpeechMsAccum = 0L
+            systemTtsWpmWordsAccum = 0
+            systemTtsWpmUtteranceStartElapsedMs = null
+        }
         val speechCallbacks =
             ParagraphSpeechSequenceCallbacks(
                 onSpeakingParagraphIndex = { speakingParagraphIndex = it },
@@ -1314,7 +1399,7 @@ fun AppTabs() {
             } catch (e: Exception) {
                 Toast.makeText(
                     context,
-                    e.message ?: "Lỗi chuyển truyện tiếp theo",
+                    e.message ?: "Lỗi chuyển chương tiếp theo",
                     Toast.LENGTH_SHORT,
                 ).show()
             }
@@ -1337,9 +1422,25 @@ fun AppTabs() {
                     override fun onUtteranceStart(utteranceId: String?) {
                         systemTtsUtteranceDepth++
                         speakingParagraphIndex = parseTtsParagraphIndex(utteranceId) ?: -1
+                        if (parseTtsParagraphIndex(utteranceId) != null) {
+                            systemTtsWpmUtteranceStartElapsedMs = SystemClock.elapsedRealtime()
+                        }
                     }
 
                     override fun onUtteranceDone(utteranceId: String?) {
+                        val paraIdx = parseTtsParagraphIndex(utteranceId)
+                        if (paraIdx != null) {
+                            val start = systemTtsWpmUtteranceStartElapsedMs
+                            val now = SystemClock.elapsedRealtime()
+                            if (start != null) {
+                                systemTtsWpmSpeechMsAccum += (now - start).coerceAtLeast(0L)
+                            }
+                            systemTtsWpmUtteranceStartElapsedMs = null
+                            val spoken = systemTtsWpmOrigToText[paraIdx]
+                            if (!spoken.isNullOrEmpty()) {
+                                systemTtsWpmWordsAccum += wordCountForTtsPlaybackWpm(spoken)
+                            }
+                        }
                         systemTtsUtteranceDepth =
                             (systemTtsUtteranceDepth - 1).coerceAtLeast(0)
                         speakingParagraphIndex = -1
@@ -1362,6 +1463,19 @@ fun AppTabs() {
                     }
 
                     override fun onUtteranceError(utteranceId: String?) {
+                        val paraIdxErr = parseTtsParagraphIndex(utteranceId)
+                        if (paraIdxErr != null) {
+                            val start = systemTtsWpmUtteranceStartElapsedMs
+                            val now = SystemClock.elapsedRealtime()
+                            if (start != null) {
+                                systemTtsWpmSpeechMsAccum += (now - start).coerceAtLeast(0L)
+                            }
+                            systemTtsWpmUtteranceStartElapsedMs = null
+                            val spoken = systemTtsWpmOrigToText[paraIdxErr]
+                            if (!spoken.isNullOrEmpty()) {
+                                systemTtsWpmWordsAccum += wordCountForTtsPlaybackWpm(spoken)
+                            }
+                        }
                         systemTtsUtteranceDepth =
                             (systemTtsUtteranceDepth - 1).coerceAtLeast(0)
                         speakingParagraphIndex = -1
@@ -1394,6 +1508,29 @@ fun AppTabs() {
 
     val systemTtsPlaybackActive =
         systemTtsUtteranceDepth > 0 || systemTtsStoryUtterancesRemaining > 0
+
+    val playbackActiveForWpmTick = rememberUpdatedState(systemTtsPlaybackActive)
+    val engineForWpmTick = rememberUpdatedState(textTabSpeechEngine)
+    LaunchedEffect(systemTtsPlaybackActive, textTabSpeechEngine) {
+        while (playbackActiveForWpmTick.value && engineForWpmTick.value == TextTabSpeechEngine.System) {
+            delay(300)
+            systemTtsWpmLiveTick++
+        }
+    }
+
+    val systemTtsMeasuredWpm: Int? = run {
+        systemTtsWpmLiveTick // ghim recompose theo tick khi đang phát
+        if (textTabSpeechEngine != TextTabSpeechEngine.System || !systemTtsPlaybackActive) {
+            null
+        } else {
+            val now = SystemClock.elapsedRealtime()
+            val partial =
+                systemTtsWpmUtteranceStartElapsedMs?.let { (now - it).coerceAtLeast(0L) } ?: 0L
+            val denom = (systemTtsWpmSpeechMsAccum + partial).coerceAtLeast(1L)
+            if (systemTtsWpmWordsAccum <= 0) null
+            else ((systemTtsWpmWordsAccum * 60000L + denom / 2) / denom).toInt()
+        }
+    }
 
     // --- Scaffold + hộp thoại font / cài đặt giọng ---
     Box(modifier = Modifier.fillMaxSize()) {
@@ -1440,8 +1577,7 @@ fun AppTabs() {
             ttsReady = ttsReady,
             elevenLabsPlayJob = elevenLabsPlayJob,
             systemTtsPlaybackActive = systemTtsPlaybackActive,
-            systemTtsQueuedParagraphUtterances =
-                systemParagraphSpeechEngine.queuedParagraphUtterancePipelineDepth(),
+            systemTtsMeasuredWpm = systemTtsMeasuredWpm,
             onEditorTextChange = { newText ->
                 text = newText
                 prefs.saveLastText(newText)

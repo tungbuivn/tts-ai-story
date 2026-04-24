@@ -175,7 +175,7 @@ fun DialogOnlineDomainParsersManage(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    "Mỗi domain chỉ một cấu hình. Khi tạo thể loại online, app khớp domain của URL với danh sách dưới để gán «Trang tiếp» và «Nội dung».",
+                    "Mỗi domain chỉ một cấu hình. Khi tạo truyện online (URL), app khớp domain của URL với danh sách dưới để gán «Trang tiếp» và «Nội dung».",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

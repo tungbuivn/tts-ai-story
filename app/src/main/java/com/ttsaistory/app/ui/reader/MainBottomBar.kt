@@ -59,7 +59,10 @@ fun MainBottomBar(
     librarySyncEpoch: Int,
     activeLibraryStoryId: Long?,
     textTabSpeechEngine: TextTabSpeechEngine,
-    systemTtsQueuedParagraphUtterances: Int,
+    /** Đang phát loạt TTS hệ thống (tab Văn bản). */
+    systemTtsPlaybackActive: Boolean,
+    /** WPM ước lượng; null trong đoạn đầu chưa có đoạn nào đọc xong. */
+    systemTtsMeasuredWpm: Int?,
 ) {
     val paragraphServiceTotal by ParagraphTextService.totalItemCount.collectAsState(initial = null)
     // Không key theo [text]: tránh splitIntoParagraphs toàn văn mỗi lần gõ; chỉ khi vào tab Text
@@ -132,13 +135,16 @@ fun MainBottomBar(
     val lastReadingParagraphIndex = ReaderReadingProgress.currentSentenceIndex0Based.intValue
     val speaking = speakingParagraphIndex
     val fromFocusedCell = readerBottomNavBridge?.readerProgressCurrentOneBased
+    val paragraphSplitEditBarShows = readerBottomNavBridge?.showParagraphSplitEditBar == true
     // Khi không phát: bookmark (prefs, vừa persist khi Stop) phản ánh câu TTS thực tế; ô focus
     // có thể chưa theo kịp TTS nên không được ưu tiên hơn bookmark — tránh nhảy về bookmark/ô cũ.
+    // Ngoại lệ: chế độ sửa theo ô (nối/tách/xóa) — luôn hiện chỉ số theo ô đang chọn (kể cả khi luôn ẩn phím).
     val curOneBased =
         when {
             progressStillLoading ->
                 when {
                     speaking >= 0 -> speaking + 1
+                    paragraphSplitEditBarShows && fromFocusedCell != null -> fromFocusedCell
                     lastReadingParagraphIndex >= 0 -> lastReadingParagraphIndex + 1
                     fromFocusedCell != null -> fromFocusedCell
                     else -> 1
@@ -146,6 +152,8 @@ fun MainBottomBar(
 
             totalSpeakable <= 0 -> 0
             speaking >= 0 -> (speaking + 1).coerceIn(1, totalSpeakable)
+            paragraphSplitEditBarShows && fromFocusedCell != null ->
+                fromFocusedCell.coerceIn(1, totalSpeakable)
             lastReadingParagraphIndex >= 0 ->
                 (lastReadingParagraphIndex + 1).coerceIn(1, totalSpeakable)
 
@@ -336,14 +344,15 @@ fun MainBottomBar(
                         )
                         if (tabIndex == 0 &&
                             textTabSpeechEngine == TextTabSpeechEngine.System &&
-                            systemTtsQueuedParagraphUtterances > 0
+                            systemTtsPlaybackActive
                         ) {
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text =
-                                    "Hàng đợi TTS: ${systemTtsQueuedParagraphUtterances}",
+                                    systemTtsMeasuredWpm?.let { wpm ->
+                                        "≈ $wpm từ/phút"
+                                    } ?: "Đang đo tốc độ đọc…",
                                 style = MaterialTheme.typography.labelSmall,
-                                // color = MaterialTheme.colorScheme.primary,
                             )
                         }
                     }

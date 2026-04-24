@@ -93,7 +93,7 @@ internal fun LibraryCategoryOverflowMenu(
                     }
                 Toast.makeText(
                     ctx,
-                    "Đã xóa nội dung cũ và nhập lại $n truyện từ thư mục đã lưu.",
+                    "Đã xóa nội dung cũ và nhập lại $n chương từ thư mục đã lưu.",
                     Toast.LENGTH_LONG,
                 ).show()
                 onLibraryChanged()
@@ -115,7 +115,7 @@ internal fun LibraryCategoryOverflowMenu(
         IconButton(onClick = { expanded = true }) {
             Icon(
                 Icons.Filled.MoreVert,
-                contentDescription = "Tùy chọn thể loại",
+                contentDescription = "Tùy chọn truyện",
             )
         }
         DropdownMenu(
@@ -123,7 +123,7 @@ internal fun LibraryCategoryOverflowMenu(
             onDismissRequest = { expanded = false },
         ) {
             DropdownMenuItem(
-                text = { Text("Đổi tên thể loại") },
+                text = { Text("Đổi tên truyện") },
                 onClick = {
                     expanded = false
                     onRename()
@@ -153,7 +153,7 @@ internal fun LibraryCategoryOverflowMenu(
             DropdownMenuItem(
                 text = {
                     Text(
-                        "Xóa thể loại",
+                        "Xóa truyện",
                         color = MaterialTheme.colorScheme.error,
                     )
                 },

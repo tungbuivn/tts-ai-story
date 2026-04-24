@@ -19,7 +19,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.MergeType
+import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -54,12 +54,12 @@ import com.ttsaistory.app.ui.core.DialogSemanticTone
 import kotlinx.coroutines.delay
 
 /**
- * Bảng chọn truyện trong một thể loại — kiểu **end drawer**: **không dùng [androidx.compose.ui.window.Dialog]**,
+ * Bảng chọn chương trong một truyện (thư viện) — kiểu **end drawer**: **không dùng [androidx.compose.ui.window.Dialog]**,
  * hai lớp `Box` chồng nhau: scrim full màn (trái bấm đóng) + dải phải **full chiều cao** vùng tab (nền
  * [androidx.compose.material3.MaterialTheme.colorScheme.surface] kín, không để lộ nội dung phía dưới),
  * bên trong là [Card]. [BackHandler] gọi [onDismissRequest]. [LazyColumn] + `key`; lọc debounce;
- * đổi thứ tự (sort_order) khi không lọc; xóa truyện ([onDeleteStory]) sau khi xác nhận [AppAlertDialog];
- * ghép truyện vào truyện ngay phía trên trong danh sách ([onJoinStoryIntoPrevious]) khi không lọc.
+ * đổi thứ tự (sort_order) khi không lọc; xóa chương ([onDeleteStory]) sau khi xác nhận [AppAlertDialog];
+ * ghép chương vào chương ngay phía trên trong danh sách ([onJoinStoryIntoPrevious]) khi không lọc.
  * Mỗi dòng hiển thị [LibraryStoryRow.lastSpeechSentenceIndex] (câu 1-based); hàng [currentStoryId] được tô nổi.
  */
 @Composable
@@ -69,14 +69,14 @@ internal fun DialogReaderStoryPicker(
     categoryTitle: String,
     loading: Boolean,
     stories: List<LibraryStoryRow>,
-    /** Thể loại đang mở — cần để gọi [com.ttsaistory.app.data.StoryLibraryRepository.moveStoryOrderInCategory]. */
+    /** Truyện (nhóm) đang mở — cần để gọi [com.ttsaistory.app.data.StoryLibraryRepository.moveStoryOrderInCategory]. */
     categoryId: Long?,
     currentStoryId: Long?,
     onStorySelected: (Long) -> Unit,
     /** [delta] `-1` lên trên, `+1` xuống dưới (chỉ khi danh sách không bị lọc). */
     onMoveStoryOrder: (storyId: Long, delta: Int) -> Unit,
     onDeleteStory: (storyId: Long) -> Unit,
-    /** Ghép nội dung [storyId] vào truyện [previousStoryId] (phía trên), mở đích, xóa [storyId]. */
+    /** Ghép nội dung chương [storyId] vào chương [previousStoryId] (phía trên), mở đích, xóa [storyId]. */
     onJoinStoryIntoPrevious: (storyId: Long, previousStoryId: Long) -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -179,15 +179,15 @@ internal fun DialogReaderStoryPicker(
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.Home,
-                                    contentDescription = "Mở truyện đầu danh sách",
+                                    contentDescription = "Mở chương đầu danh sách",
                                 )
                             }
                             Text(
                                 text =
                                     if (categoryTitle.isNotBlank()) {
-                                        "Truyện — $categoryTitle"
+                                        "Truyện: $categoryTitle"
                                     } else {
-                                        "Truyện trong thể loại"
+                                        "Chương trong thư viện"
                                     },
                                 style = MaterialTheme.typography.titleSmall,
                                 modifier = Modifier.weight(1f),
@@ -212,7 +212,7 @@ internal fun DialogReaderStoryPicker(
                             },
                             placeholder = {
                                 Text(
-                                    "${stories.size} truyện",
+                                    "${stories.size} chương",
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             },
@@ -220,7 +220,7 @@ internal fun DialogReaderStoryPicker(
                         )
                         if (!reorderEnabled && stories.size > 1 && debouncedFilter.isNotBlank()) {
                             Text(
-                                text = "Xóa bộ lọc để sắp xếp thứ tự truyện.",
+                                text = "Xóa bộ lọc để sắp xếp thứ tự chương.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -239,7 +239,7 @@ internal fun DialogReaderStoryPicker(
 
                             stories.isEmpty() ->
                                 Text(
-                                    text = "Không có truyện trong thể loại này.",
+                                    text = "Không có chương trong truyện này.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier =
@@ -250,7 +250,7 @@ internal fun DialogReaderStoryPicker(
 
                             displayed.isEmpty() ->
                                 Text(
-                                    text = "Không có truyện khớp bộ lọc.",
+                                    text = "Không có chương khớp bộ lọc.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.weight(1f),
@@ -386,7 +386,7 @@ internal fun DialogReaderStoryPicker(
                                                 ) {
                                                     Icon(
                                                         imageVector = Icons.Filled.Delete,
-                                                        contentDescription = "Xóa truyện",
+                                                        contentDescription = "Xóa chương",
                                                     )
                                                 }
                                                 IconButton(
@@ -397,8 +397,8 @@ internal fun DialogReaderStoryPicker(
                                                     enabled = reorderEnabled && idx > 0 && !loading,
                                                 ) {
                                                     Icon(
-                                                        imageVector = Icons.Filled.MergeType,
-                                                        contentDescription = "Ghép vào truyện phía trên",
+                                                        imageVector = Icons.AutoMirrored.Filled.MergeType,
+                                                        contentDescription = "Ghép vào chương phía trên",
                                                     )
                                                 }
                                             }
@@ -416,7 +416,7 @@ internal fun DialogReaderStoryPicker(
             AppAlertDialog(
                 tone = DialogSemanticTone.Error,
                 onDismissRequest = { deleteConfirmStory = null },
-                title = { Text("Xóa truyện?") },
+                title = { Text("Xóa chương?") },
                 text = { Text(titleText) },
                 confirmButton = {
                     Button(
@@ -438,7 +438,7 @@ internal fun DialogReaderStoryPicker(
             AppAlertDialog(
                 tone = DialogSemanticTone.Warning,
                 onDismissRequest = { joinConfirmPair = null },
-                title = { Text("Ghép truyện?") },
+                title = { Text("Ghép chương?") },
                 text = {
                     Text(
                         "Nối nội dung «$appendTitle» vào cuối «$targetTitle», mở «$targetTitle», " +

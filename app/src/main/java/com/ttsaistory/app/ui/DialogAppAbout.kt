@@ -51,7 +51,7 @@ fun DialogAppAbout(onDismissRequest: () -> Unit) {
                 )
                 Text(
                     text =
-                        "Soạn và đọc truyện bằng TTS hệ thống hoặc ElevenLabs; lưu thư viện theo thể loại; " +
+                        "Soạn và đọc văn bản bằng TTS hệ thống hoặc ElevenLabs; thư viện gồm các truyện, mỗi truyện có nhiều chương; " +
                             "nhập thư mục từ bộ nhớ; đồng bộ / làm mới nội dung truyện web khi cần.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = scheme.onSurface,
@@ -63,25 +63,25 @@ fun DialogAppAbout(onDismissRequest: () -> Unit) {
                 )
                 Text(
                     text =
-                        "• Văn bản: .txt, text/* (kể cả HTML qua Chia sẻ).\n" +
-                            "• EPUB: .epub (application/epub+zip).\n" +
-                            "• ZIP: .zip / application/zip (gói truyện nén).\n" +
-                            "• PDF: .pdf.\n" +
-                            "• Mở bằng / Gửi tới app / Xử lý văn bản (PROCESS_TEXT) — tùy máy và app nguồn.",
-                    style = MaterialTheme.typography.bodySmall,
+                        "• Văn bản: .txt, text/*, HTML qua chia sẻ.\n" +
+                            "• EPUB: .epub \n" +
+                            "• ZIP: .zip \n" +
+                            "• PDF: .pdf\n" +
+                            "• Mở bằng / Gửi tới app / Xử lý văn bản",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = scheme.onSurfaceVariant,
                 )
                 Text(
-                    text = "File xuất (output)",
+                    text = "File xuất",
                     style = MaterialTheme.typography.titleSmall,
                     color = scheme.onSurface,
                 )
                 Text(
                     text =
-                        "• Thư viện — xuất theo thể loại: .txt (một file ghép hoặc nhiều file .txt đánh số), " +
-                            ".zip (một file .txt ghép hoặc nhiều .txt trong zip), .epub — lưu dưới Download/tts-ai-story.\n" +
-                            "• Đọc TTS — xuất AAC: .m4a (cả truyện) — lưu dưới Music/tts-ai-story (đường dẫn cụ thể hiện khi xuất xong).",
-                    style = MaterialTheme.typography.bodySmall,
+                        "• Thư viện — xuất theo truyện: .txt (một file ghép hoặc nhiều file .txt đánh số), " +
+                            ".zip (một file .txt ghép hoặc nhiều .txt trong zip), .epub — lưu tại Download/tts-ai-story.\n" +
+                            "• Đọc TTS — xuất AAC: .m4a (cả truyện) — lưu tại Music/tts-ai-story.",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = scheme.onSurfaceVariant,
                 )
                 Text(
@@ -92,19 +92,10 @@ fun DialogAppAbout(onDismissRequest: () -> Unit) {
                 Text(
                     text =
                         "Ứng dụng chạy trên thiết bị của bạn; thư viện và file nhập nằm trong không gian lưu riêng của app.",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = scheme.onSurfaceVariant,
                 )
-                Text(
-                    text = "Liên hệ",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = scheme.onSurface,
-                )
-                Text(
-                    text = "Tác giả: tungbuivn\nEmail: tungbuivn@gmail.com",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                )
+              
             }
         },
         confirmButton = {

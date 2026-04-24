@@ -107,7 +107,7 @@ fun LibraryTab(
             } catch (e: Exception) {
                 Toast.makeText(
                     ctx,
-                    e.message ?: "Lỗi đổi thứ tự thể loại",
+                    e.message ?: "Lỗi đổi thứ tự truyện",
                     Toast.LENGTH_SHORT,
                 ).show()
                 reload()
@@ -301,7 +301,7 @@ fun LibraryTab(
                                             if (cat.storyCount <= 0) {
                                                 Toast.makeText(
                                                     ctx,
-                                                    "Chưa có truyện trong thể loại.",
+                                                    "Chưa có chương trong truyện này.",
                                                     Toast.LENGTH_SHORT,
                                                 ).show()
                                                 return@clickable
@@ -319,7 +319,7 @@ fun LibraryTab(
                                                 } else {
                                                     Toast.makeText(
                                                         ctx,
-                                                        "Chưa có truyện trong thể loại.",
+                                                        "Chưa có chương trong truyện này.",
                                                         Toast.LENGTH_SHORT,
                                                     ).show()
                                                 }
@@ -347,7 +347,7 @@ fun LibraryTab(
                                     }
                                 }
                                 Text(
-                                    "${cat.storyCount} truyện",
+                                    "${cat.storyCount} chương",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -418,7 +418,7 @@ fun LibraryTab(
                                 }
                             Toast.makeText(
                                     ctx,
-                                    "Đã tạo thể loại online và một truyện (URL đã lưu). Selector theo domain trong Cấu hình Parser online.",
+                                    "Đã tạo truyện online và một chương (URL đã lưu). Selector theo domain trong Cấu hình Parser online.",
                                     Toast.LENGTH_LONG,
                                 )
                                 .show()
@@ -430,7 +430,7 @@ fun LibraryTab(
                             withContext(Dispatchers.IO) {
                                 repository.insertCategory(trimmed)
                             }
-                            Toast.makeText(ctx, "Đã tạo thể loại", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, "Đã tạo truyện", Toast.LENGTH_SHORT).show()
                             showAddCategory = false
                             newCategoryName = ""
                             reload()

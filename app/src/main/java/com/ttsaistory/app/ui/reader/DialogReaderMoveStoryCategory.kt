@@ -30,7 +30,7 @@ internal fun DialogReaderMoveStoryCategory(
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("Chuyển thể loại / đổi tên") },
+        title = { Text("Chuyển chương / đổi tên") },
         text = {
             Column(
                 modifier =
@@ -49,7 +49,7 @@ internal fun DialogReaderMoveStoryCategory(
                     onValueChange = onMoveStoryTitleDraftChange,
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    label = { Text("Tên truyện") },
+                    label = { Text("Tên chương") },
                 )
                 TextButton(
                     onClick = onSaveTitleClick,
@@ -59,12 +59,12 @@ internal fun DialogReaderMoveStoryCategory(
                     Text("Lưu tên")
                 }
                 Text(
-                    "Chuyển sang thể loại",
+                    "Chuyển sang truyện",
                     style = MaterialTheme.typography.labelLarge,
                 )
                 if (moveCategoryCategories.none { it.id != story.categoryId }) {
                     Text(
-                        "Tạo thêm một thể loại khác để có thể chuyển.",
+                        "Tạo thêm một truyện khác trong thư viện để có thể chuyển.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

@@ -96,7 +96,7 @@ internal fun AppMainTopAppBar(
                 IconButton(onClick = onLibraryAddCategoryClick) {
                     Icon(
                         Icons.Filled.Add,
-                        contentDescription = "Thêm thể loại",
+                        contentDescription = "Thêm truyện",
                     )
                 }
                 IconButton(onClick = onLibraryImportFolderClick) {

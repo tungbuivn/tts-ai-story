@@ -36,26 +36,26 @@ internal fun DialogReaderNewLibraryStory(
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("Truyện mới") },
+        title = { Text("Chương mới") },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = "Tạo file trống, tiêu đề không tên (số thứ tự). Chọn thể loại:",
+                    text = "Tạo file trống, tiêu đề không tên (số thứ tự). Chọn truyện:",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (categories.isEmpty()) {
                     Text(
-                        text = "Chưa có thể loại — nhập tên thể loại mới bên dưới.",
+                        text = "Chưa có truyện nào — nhập tên truyện mới bên dưới.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
                     Text(
-                        text = "Thể loại",
+                        text = "Truyện",
                         style = MaterialTheme.typography.labelLarge,
                     )
                     LazyColumn(
@@ -103,7 +103,7 @@ internal fun DialogReaderNewLibraryStory(
                 OutlinedTextField(
                     value = newCategoryNameDraft,
                     onValueChange = onNewCategoryNameDraftChange,
-                    label = { Text("Hoặc thể loại mới (ưu tiên)") },
+                    label = { Text("Hoặc truyện mới (ưu tiên)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )

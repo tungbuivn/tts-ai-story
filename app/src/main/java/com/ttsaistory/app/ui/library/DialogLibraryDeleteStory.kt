@@ -15,7 +15,7 @@ internal fun DialogLibraryDeleteStory(
     AppAlertDialog(
         tone = DialogSemanticTone.Error,
         onDismissRequest = onDismissRequest,
-        title = { Text("Xóa truyện?") },
+        title = { Text("Xóa chương?") },
         text = { Text(storyTitle) },
         confirmButton = {
             Button(onClick = onConfirmDelete) {

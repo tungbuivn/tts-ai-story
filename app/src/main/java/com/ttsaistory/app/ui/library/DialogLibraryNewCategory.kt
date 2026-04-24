@@ -17,7 +17,7 @@ internal fun DialogLibraryNewCategory(
     onDismissRequest: () -> Unit,
     /**
      * [trimmedName] đã trim, không rỗng.
-     * [treatAsOnlineWebCategory] true khi nhận diện URL — tạo thể loại online; selector theo domain từ DB (menu Parser online).
+     * [treatAsOnlineWebCategory] true khi nhận diện URL — tạo truyện online; selector theo domain từ DB (menu Parser online).
      */
     onConfirmCreate: (trimmedName: String, treatAsOnlineWebCategory: Boolean) -> Unit,
 ) {
@@ -25,7 +25,7 @@ internal fun DialogLibraryNewCategory(
     AppAlertDialog(
         tone = DialogSemanticTone.Info,
         onDismissRequest = onDismissRequest,
-        title = { Text("Thể loại mới") },
+        title = { Text("Truyện mới (thư viện)") },
         text = {
             OutlinedTextField(
                 value = categoryNameDraft,
@@ -34,7 +34,7 @@ internal fun DialogLibraryNewCategory(
                 supportingText = {
                     if (asUrl) {
                         Text(
-                            "Nhận diện URL — tạo thể loại online. Cấu hình selector theo domain trong menu ☰ → Cấu hình Parser online.",
+                            "Nhận diện URL — tạo truyện online. Cấu hình selector theo domain trong menu ☰ → Cấu hình Parser online.",
                         )
                     }
                 },

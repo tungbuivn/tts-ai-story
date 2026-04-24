@@ -46,25 +46,25 @@ internal fun DialogLibraryExportCategoryToDownloads(
                     selected = exportFormat == LibraryCategoryExportFormat.SeparateFilesInFolder,
                     onClick = { onExportFormatChange(LibraryCategoryExportFormat.SeparateFilesInFolder) },
                     title = "Thư mục + nhiều file .txt",
-                    subtitle = "Một thư mục trùng tên thể loại, mỗi truyện một file 00000001.txt …",
+                    subtitle = "Một thư mục trùng tên truyện, mỗi chương một file 00000001.txt …",
                 )
                 ExportFormatRadioRow(
                     selected = exportFormat == LibraryCategoryExportFormat.MergedSingleTxt,
                     onClick = { onExportFormatChange(LibraryCategoryExportFormat.MergedSingleTxt) },
                     title = "Một file .txt (ghép)",
-                    subtitle = "File duy nhất <tên thể loại>.txt, nội dung các truyện nối lại.",
+                    subtitle = "File duy nhất <tên truyện>.txt, nội dung các chương nối lại.",
                 )
                 ExportFormatRadioRow(
                     selected = exportFormat == LibraryCategoryExportFormat.SingleZip,
                     onClick = { onExportFormatChange(LibraryCategoryExportFormat.SingleZip) },
                     title = "Một file .zip",
-                    subtitle = "File <tên thể loại>.zip; bên trong các .txt đánh số như tùy chọn thư mục.",
+                    subtitle = "File <tên truyện>.zip; bên trong các .txt đánh số như tùy chọn thư mục.",
                 )
                 ExportFormatRadioRow(
                     selected = exportFormat == LibraryCategoryExportFormat.SingleEpub,
                     onClick = { onExportFormatChange(LibraryCategoryExportFormat.SingleEpub) },
                     title = "Một file .epub",
-                    subtitle = "Mục lục (nav): dòng đầu tiên của mỗi truyện; mỗi truyện một chương XHTML.",
+                    subtitle = "Mục lục (nav): dòng đầu tiên của mỗi chương; mỗi chương một tệp XHTML.",
                 )
             }
         },

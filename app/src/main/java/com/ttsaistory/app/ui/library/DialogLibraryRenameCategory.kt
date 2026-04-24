@@ -20,7 +20,7 @@ internal fun DialogLibraryRenameCategory(
     AppAlertDialog(
         tone = DialogSemanticTone.Info,
         onDismissRequest = onDismissRequest,
-        title = { Text("Đổi tên") },
+        title = { Text("Đổi tên truyện") },
         text = {
             OutlinedTextField(
                 value = nameDraft,

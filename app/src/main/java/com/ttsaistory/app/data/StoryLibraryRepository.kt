@@ -15,6 +15,7 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import com.ttsaistory.app.domain.buildEpub3ZipBytes
 import com.ttsaistory.app.domain.canonicalTextFromRaw
+import com.ttsaistory.app.domain.splitIntoParagraphs
 import com.ttsaistory.app.domain.firstLineForEpubNavigationLabel
 import com.ttsaistory.app.domain.listImportFolderFilesSorted
 import com.ttsaistory.app.domain.readUtf8FromImportTreeEntry
@@ -307,7 +308,7 @@ class StoryLibraryRepository(private val context: Context) {
                 put("sort_order", nextOrd)
             }
         val id = db.insert("categories", null, cv)
-        if (id < 0) error("Không tạo được thể loại (tên trùng?)")
+        if (id < 0) error("Không tạo được truyện (tên trùng?)")
         return id
     }
 
@@ -341,12 +342,12 @@ class StoryLibraryRepository(private val context: Context) {
                 put("online_base_url", url)
             }
         val id = db.insert("categories", null, cv)
-        if (id < 0) error("Không tạo được thể loại online (URL trùng?)")
+        if (id < 0) error("Không tạo được truyện online (URL trùng?)")
         val seedTitle =
             parsed.host?.trim()?.takeIf { it.isNotEmpty() } ?: "Trang web"
         val seedBody =
             buildString {
-                appendLine("Thể loại online — URL trang được lưu trong metadata truyện (online_page_url).")
+                appendLine("Truyện online — URL trang được lưu trong metadata chương (online_page_url).")
                 appendLine()
                 appendLine(url)
             }
@@ -542,7 +543,7 @@ class StoryLibraryRepository(private val context: Context) {
                 "id = ?",
                 arrayOf(categoryId.toString()),
             )
-        if (n != 1) error("Không cập nhật được selector nội dung cho thể loại")
+        if (n != 1) error("Không cập nhật được selector nội dung cho truyện")
     }
 
     /** Ghi lại thứ tự hiển thị thể loại (0 = trên cùng). */
@@ -581,7 +582,7 @@ class StoryLibraryRepository(private val context: Context) {
         require(t.isNotEmpty())
         findCategoryIdByName(t)?.let { return it }
         return runCatching { insertCategory(t) }.getOrElse {
-            findCategoryIdByName(t) ?: error("Không tạo hoặc tìm thể loại: $t")
+            findCategoryIdByName(t) ?: error("Không tạo hoặc tìm truyện: $t")
         }
     }
 
@@ -642,7 +643,7 @@ class StoryLibraryRepository(private val context: Context) {
                 "id = ?",
                 arrayOf(categoryId.toString()),
             )
-        if (n <= 0) error("Không đổi tên được thể loại")
+        if (n <= 0) error("Không đổi tên được truyện")
     }
 
     /** Ghi URI cây SAF của lần «Import thư mục» gần nhất — dùng để nhập lại / xóa hết rồi import lại. */
@@ -662,7 +663,7 @@ class StoryLibraryRepository(private val context: Context) {
                 "id = ?",
                 arrayOf(categoryId.toString()),
             )
-        if (n <= 0) error("Không cập nhật được thể loại")
+        if (n <= 0) error("Không cập nhật được truyện")
     }
 
     /**
@@ -1132,7 +1133,7 @@ class StoryLibraryRepository(private val context: Context) {
         onProgress: ((completedSteps: Int, totalSteps: Int, currentLabel: String) -> Unit)? = null,
     ): String {
         val stories = listStories(categoryId)
-        if (stories.isEmpty()) error("Không có truyện")
+        if (stories.isEmpty()) error("Không có chương")
         val folderBase = sanitizeExportFileBase(categoryDisplayName).ifBlank { "the_loai" }
         val relativeParent =
             "${Environment.DIRECTORY_DOWNLOADS}/$EXPORT_DOWNLOAD_FOLDER/$folderBase"
@@ -1193,7 +1194,7 @@ class StoryLibraryRepository(private val context: Context) {
                 buildZipWithEntries(listOf("$base.txt" to merged))
             } else {
                 val stories = listStories(categoryId)
-                if (stories.isEmpty()) error("Không có truyện")
+                if (stories.isEmpty()) error("Không có chương")
                 val entries =
                     stories.mapIndexed { index, story ->
                         val name = String.format(Locale.US, "%08d.txt", index + 1)
@@ -1225,7 +1226,7 @@ class StoryLibraryRepository(private val context: Context) {
         onProgress: ((completedSteps: Int, totalSteps: Int, currentLabel: String) -> Unit)? = null,
     ): String {
         val stories = listStories(categoryId)
-        if (stories.isEmpty()) error("Không có truyện")
+        if (stories.isEmpty()) error("Không có chương")
         val base = sanitizeExportFileBase(categoryDisplayName).ifBlank { "the_loai" }
         val epubName = "$base.epub"
         val relativeParent = "${Environment.DIRECTORY_DOWNLOADS}/$EXPORT_DOWNLOAD_FOLDER"
@@ -1553,7 +1554,7 @@ class StoryLibraryRepository(private val context: Context) {
 
     /** Đổi thể loại: chuyển file sang thư mục mới, cập nhật DB. */
     fun moveStoryToCategory(storyId: Long, newCategoryId: Long) {
-        val row = getStory(storyId) ?: error("Không tìm thấy truyện")
+        val row = getStory(storyId) ?: error("Không tìm thấy chương")
         if (row.categoryId == newCategoryId) return
         val db = helper.writableDatabase
         db.beginTransaction()
@@ -1680,7 +1681,7 @@ class StoryLibraryRepository(private val context: Context) {
                 put("updated_at", now)
             }
         val id = db.insert("saved_stories", null, cv)
-        if (id < 0) error("Không lưu được metadata truyện")
+        if (id < 0) error("Không lưu được metadata chương")
         val dir = categoryDir(categoryId)
         val file = File(dir, "story_$id.txt")
         file.writeText(body, Charsets.UTF_8)
@@ -1906,10 +1907,10 @@ class StoryLibraryRepository(private val context: Context) {
      * URI **cây** (bản cũ) → đọc ghép toàn cây như trước.
      */
     fun resyncImportedStory(storyId: Long) {
-        val row = getStory(storyId) ?: error("Không tìm thấy truyện")
+        val row = getStory(storyId) ?: error("Không tìm thấy chương")
         val uriStr =
             row.importSourceUri?.trim().takeUnless { it.isNullOrEmpty() }
-                ?: error("Truyện không gắn import")
+                ?: error("Chương không gắn import")
         val uri = Uri.parse(uriStr)
         val raw =
             when {
@@ -1937,10 +1938,10 @@ class StoryLibraryRepository(private val context: Context) {
         val treeStr =
             getCategoryImportFolderTreeUri(categoryId)
                 ?: error(
-                    "Thể loại chưa gắn thư mục import. Hãy dùng «Import thư mục» cho thể loại này (một lần) để lưu đường dẫn thư mục.",
+                    "Truyện chưa gắn thư mục import. Hãy dùng «Import thư mục» cho truyện này (một lần) để lưu đường dẫn thư mục.",
                 )
         val categoryName =
-            getCategoryName(categoryId) ?: error("Không tìm thấy thể loại")
+            getCategoryName(categoryId) ?: error("Không tìm thấy truyện")
         val entries = listImportFolderFilesSorted(context, treeStr)
         if (entries.isEmpty()) {
             error("Không đọc được file trong thư mục (có thể đã mất quyền hoặc thư mục rỗng).")
@@ -1991,20 +1992,20 @@ class StoryLibraryRepository(private val context: Context) {
     }
 
     fun updateStoryText(storyId: Long, body: String) {
-        val row = getStory(storyId) ?: error("Không tìm thấy truyện")
+        val row = getStory(storyId) ?: error("Không tìm thấy chương")
         writeStoryTextBodyToDiskAndDb(storyId, row, body)
     }
 
     /**
      * Nối nội dung [appendStoryId] vào cuối [targetStoryId] (đã bỏ dòng đầu trùng tên file nếu có),
-     * đặt `last_speech_sentence_index` của đích về `-1`, rồi xóa truyện [appendStoryId].
-     * Hai truyện phải cùng thể loại.
+     * giữ / ánh xạ `last_speech_sentence_index` của đích theo nội dung sau ghép, rồi xóa truyện [appendStoryId].
+     * Hai chương phải thuộc cùng một truyện (nhóm).
      */
     fun joinAppendStoryIntoTarget(targetStoryId: Long, appendStoryId: Long) {
-        val target = getStory(targetStoryId) ?: error("Không tìm thấy truyện đích")
-        val append = getStory(appendStoryId) ?: error("Không tìm thấy truyện ghép")
-        require(target.categoryId == append.categoryId) { "Hai truyện khác thể loại" }
-        require(targetStoryId != appendStoryId) { "Không ghép truyện vào chính nó" }
+        val target = getStory(targetStoryId) ?: error("Không tìm thấy chương đích")
+        val append = getStory(appendStoryId) ?: error("Không tìm thấy chương ghép")
+        require(target.categoryId == append.categoryId) { "Hai chương không cùng một truyện" }
+        require(targetStoryId != appendStoryId) { "Không ghép chương vào chính nó" }
         val a = readStoryTextBodyForMerge(targetStoryId).trimEnd()
         val b = readStoryTextBodyForMerge(appendStoryId).trim()
         val merged =
@@ -2014,10 +2015,32 @@ class StoryLibraryRepository(private val context: Context) {
                 else -> "$a\n\n$b"
             }
         updateStoryText(targetStoryId, merged)
+        val mergedCanonical = canonicalTextFromRaw(merged)
+        val mergedSentenceCount = splitIntoParagraphs(mergedCanonical).size
+        val maxIdx = mergedSentenceCount - 1
+        fun clampSentenceIndex(i: Int): Int =
+            when {
+                i < 0 || maxIdx < 0 -> -1
+                else -> i.coerceIn(0, maxIdx)
+            }
+        val prefs = context.applicationContext.getSharedPreferences(AppPreferenceKeys.PREF_NAME, Context.MODE_PRIVATE)
+        val prefStoryId = prefs.getLong(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_STORY_ID, -1L)
+        val prefIdx = prefs.getInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
+        val canonicalA = canonicalTextFromRaw(a)
+        val sentencesBeforeAppend =
+            if (canonicalA.isEmpty()) 0 else splitIntoParagraphs(canonicalA).size
+        val mergedBookmark =
+            when {
+                b.isEmpty() -> clampSentenceIndex(target.lastSpeechSentenceIndex)
+                a.isEmpty() -> clampSentenceIndex(append.lastSpeechSentenceIndex)
+                prefStoryId == appendStoryId && prefIdx >= 0 ->
+                    clampSentenceIndex(sentencesBeforeAppend + prefIdx)
+                else -> clampSentenceIndex(target.lastSpeechSentenceIndex)
+            }
         val now = System.currentTimeMillis()
         val cv =
             ContentValues().apply {
-                put("last_speech_sentence_index", -1)
+                put("last_speech_sentence_index", mergedBookmark)
                 put("updated_at", now)
             }
         helper.writableDatabase.update(
@@ -2061,7 +2084,7 @@ class StoryLibraryRepository(private val context: Context) {
 
     /** Chỉ đổi tiêu đề hiển thị trong thư viện (không đổi file nội dung). */
     fun renameStory(storyId: Long, newTitle: String) {
-        getStory(storyId) ?: error("Không tìm thấy truyện")
+        getStory(storyId) ?: error("Không tìm thấy chương")
         val trimmed = newTitle.trim().ifEmpty { "Không tiêu đề" }
         val cv =
             ContentValues().apply {

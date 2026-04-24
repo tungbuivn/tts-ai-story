@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material.icons.outlined.FontDownload
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -56,6 +57,7 @@ import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.library.LibraryTab
 import com.ttsaistory.app.ui.reader.ExportM4aTopBarState
 import com.ttsaistory.app.ui.reader.MainBottomBar
+import com.ttsaistory.app.ui.reader.DialogReaderImeHideDelays
 import com.ttsaistory.app.ui.reader.ReaderTab
 import com.ttsaistory.app.ui.reader.ReaderBottomNavBridge
 import kotlinx.coroutines.CoroutineScope
@@ -91,8 +93,8 @@ fun AppModalNavigationDrawerScaffold(
     elevenLabsPlayJob: Job?,
     /** Loạt đọc TTS hệ thống còn utterance (không dùng [TextToSpeech.isSpeaking] cho nút Play). */
     systemTtsPlaybackActive: Boolean,
-    /** Số câu (utterance đoạn) còn trong pipeline queue TTS hệ thống — hiển thị trên bottom bar. */
-    systemTtsQueuedParagraphUtterances: Int,
+    /** WPM ước lượng từ thời gian phát thực tế; null khi chưa đủ dữ liệu (đoạn đầu). */
+    systemTtsMeasuredWpm: Int?,
     onEditorTextChange: (String) -> Unit,
     onTextTabSpeechEngineChange: (TextTabSpeechEngine) -> Unit,
     onStopAllSpeechReading: () -> Unit,
@@ -109,7 +111,7 @@ fun AppModalNavigationDrawerScaffold(
     onOpenStoryFromLibrary: (Long) -> Unit,
     /** Mở file văn bản qua SAF (bộ nhớ / thẻ SD). */
     onOpenTextFileFromStorage: () -> Unit,
-    /** Tab Thư viện: mở SAF chọn thư mục để import thành một truyện. */
+    /** Tab Thư viện: mở SAF chọn thư mục để import thành các chương trong một truyện. */
     onLibraryImportFolderRequested: () -> Unit,
     /** Cập nhật popup tiến trình import / nhập lại thư mục (luồng chính). */
     postLibraryFolderImportProgress: (OpenFileProgressUi?) -> Unit,
@@ -122,6 +124,7 @@ fun AppModalNavigationDrawerScaffold(
     val drawerBase = lerp(scheme.primaryContainer, scheme.surfaceContainerLow, 0.22f)
     val drawerHeaderGradientEnd = lerp(scheme.primary.copy(alpha = 0.14f), drawerBase, 0.55f)
     var showAboutDialog by remember { mutableStateOf(false) }
+    var showReaderImeHideDelaysDialog by remember { mutableStateOf(false) }
     var showDrawerOnlineDomainParserManage by remember { mutableStateOf(false) }
 
     ModalNavigationDrawer(
@@ -174,7 +177,7 @@ fun AppModalNavigationDrawerScaffold(
                             contentDescription = null,
                         )
                     },
-                    label = { Text("Text") },
+                    label = { Text("Đọc & soạn") },
                     selected = tabIndex == 0,
                     onClick = {
                         coroutineScope.launch {
@@ -262,6 +265,19 @@ fun AppModalNavigationDrawerScaffold(
                 )
                 NavigationDrawerItem(
                     icon = {
+                        Icon(Icons.Outlined.Timer, contentDescription = null)
+                    },
+                    label = { Text("Độ trễ ẩn bàn phím") },
+                    selected = false,
+                    onClick = {
+                        coroutineScope.launch {
+                            drawerState.close()
+                            showReaderImeHideDelaysDialog = true
+                        }
+                    },
+                )
+                NavigationDrawerItem(
+                    icon = {
                         Icon(Icons.Outlined.Info, contentDescription = null)
                     },
                     label = { Text("Giới thiệu") },
@@ -305,7 +321,8 @@ fun AppModalNavigationDrawerScaffold(
                     librarySyncEpoch = librarySyncEpoch,
                     activeLibraryStoryId = activeLibraryStoryId,
                     textTabSpeechEngine = textTabSpeechEngine,
-                    systemTtsQueuedParagraphUtterances = systemTtsQueuedParagraphUtterances,
+                    systemTtsPlaybackActive = systemTtsPlaybackActive,
+                    systemTtsMeasuredWpm = systemTtsMeasuredWpm,
                 )
             },
         ) { innerPadding ->
@@ -347,7 +364,7 @@ fun AppModalNavigationDrawerScaffold(
                         Tab(
                             selected = tabIndex == 0,
                             onClick = { onTabIndexChange(0) },
-                            text = { Text("Text") },
+                            text = { Text("Đọc & soạn") },
                         )
                         Tab(
                             selected = tabIndex == 1,
@@ -422,6 +439,13 @@ fun AppModalNavigationDrawerScaffold(
         DialogOnlineDomainParsersManage(
             repository = storyLibrary,
             onDismissRequest = { showDrawerOnlineDomainParserManage = false },
+        )
+    }
+
+    if (showReaderImeHideDelaysDialog) {
+        DialogReaderImeHideDelays(
+            onDismissRequest = { showReaderImeHideDelaysDialog = false },
+            prefs = prefs,
         )
     }
 

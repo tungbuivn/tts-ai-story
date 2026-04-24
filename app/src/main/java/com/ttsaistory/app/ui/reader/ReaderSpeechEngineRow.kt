@@ -64,7 +64,7 @@ internal fun ReaderSpeechEngineRow(
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.List,
-                contentDescription = "Danh sách truyện trong thể loại",
+                contentDescription = "Danh sách chương trong truyện",
             )
         }
     }

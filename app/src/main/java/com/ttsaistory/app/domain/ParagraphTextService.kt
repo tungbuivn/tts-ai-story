@@ -325,11 +325,13 @@ object ParagraphTextService {
      * chấm đơn ranh giới câu (không `..`/`...`): bỏ khoảng trắng quanh `.`, nếu sau chấm là chữ Unicode thì chèn một khoảng trắng (vd. `a.b` → `a. b`).
      * Dấu ngoặc kép Unicode (“ ” « » …) được giữ như ký tự hợp lệ (paste từ nguồn khác).
      * Sau các bước trên: tại **đầu câu** (đầu khối, sau `|`, sau `.` `!` `?`, sau xuống dòng), nếu gặp `-` rồi ngay một ký tự không phải khoảng trắng thì chèn một khoảng trắng (vd. `-Chào` → `- Chào`) — chạy cuối để không bị bước markdown gỡ khoảng kề `-`.
+     * Trước hết: [stripHyperlinksAndUrlLiterals] (http(s)/ftp/www/mailto, markdown, `<a>`, `<url>`).
      */
     fun sanitizeParagraphText(input: String): String {
-        val sb = StringBuilder(input.length)
+        val linkStripped = stripHyperlinksAndUrlLiterals(input)
+        val sb = StringBuilder(linkStripped.length)
         var pendingSpace = false
-        for (ch in input) {
+        for (ch in linkStripped) {
             if (ch == '?' && sb.isNotEmpty() && sb.last() == '?') {
                 continue
             }
@@ -435,6 +437,74 @@ object ParagraphTextService {
 
     /** Hai chữ Unicode (bỏ số / ký tự khác) hai bên `-`. */
     private val HyphenBetweenUnicodeLetters = Regex("""(?<=\p{L})-(?=\p{L})""")
+
+    /** Markdown `![alt](url)` — giữ mô tả (có thể rỗng), bỏ URL. */
+    private val reMarkdownImage = Regex("""!\[([^\]]*)\]\([^)]*\)""")
+
+    /** Markdown `[text](url)` — giữ phần hiển thị, bỏ URL. */
+    private val reMarkdownLink = Regex("""\[([^\]]*)\]\([^)]*\)""")
+
+    /** Thẻ `<a …>…</a>` — giữ nội dung hiển thị (bỏ thuộc tính href). */
+    private val reHtmlAnchor = Regex("""(?i)<a\s[^>]*>([\s\S]*?)</a>""")
+
+    /** `<https://…>` */
+    private val reAngleBracketUrl = Regex("""<(?i)https?://[^>\s]+>""")
+
+    /** `mailto:…` */
+    private val reMailto = Regex("""(?i)mailto:[^\s<>()\[\]{}'"]+""")
+
+    /**
+     * `http(s)://…`, `ftp://…`, `www.…` — không bắt giữa chữ/số (tránh cắt nhầm path trong từ).
+     * Dấu câu đuôi thường không thuộc URL được tách ra và giữ lại.
+     */
+    private val reBareWebUrl =
+        Regex("""(?i)(?<![\p{L}\p{N}])(?:https?://|ftp://|www\.)[^\s<>\[\](){}'"]+""")
+
+    private fun trimTrailingUrlPunctuation(u: String): String =
+        u.trimEnd(
+            '.',
+            ',',
+            ';',
+            ':',
+            '!',
+            '?',
+            ')',
+            ']',
+            '}',
+            '»',
+            '"',
+            '\'',
+            '…',
+            '，',
+            '。',
+            '、',
+        )
+
+    /**
+     * Gỡ URL / mailto / thẻ liên kết / markdown link khỏi văn bản (giữ nhãn hiển thị khi có).
+     * Gọi đầu [sanitizeParagraphText] để mọi tách câu / TTS không còn chuỗi link.
+     */
+    private fun stripHyperlinksAndUrlLiterals(s: String): String {
+        var t = s
+        var iter = 0
+        while (iter < 12) {
+            iter++
+            val before = t
+            t = reMarkdownImage.replace(t) { m -> m.groupValues[1].trim() }
+            t = reMarkdownLink.replace(t) { m -> m.groupValues[1].trim() }
+            t = reHtmlAnchor.replace(t) { m -> m.groupValues[1].trim() }
+            if (t == before) break
+        }
+        t = reAngleBracketUrl.replace(t, "")
+        t = reMailto.replace(t, "")
+        t =
+            reBareWebUrl.replace(t) { m ->
+                val full = m.value
+                val core = trimTrailingUrlPunctuation(full)
+                full.substring(core.length)
+            }
+        return t
+    }
 
     /**
      * Chia toàn bộ [raw] thành các **đoạn** (một đoạn = một dòng theo `\n`), đã sanitize, bỏ dòng

@@ -14,13 +14,13 @@ internal fun DialogLibraryRenameStory(
     titleDraft: String,
     onTitleDraftChange: (String) -> Unit,
     onDismissRequest: () -> Unit,
-    /** Tên sau trim; rỗng được thay bằng "Không tiêu đề" (giống logic lưu truyện). */
+    /** Tên sau trim; rỗng được thay bằng "Không tiêu đề" (giống logic lưu chương). */
     onConfirmSave: (resolvedTitle: String) -> Unit,
 ) {
     AppAlertDialog(
         tone = DialogSemanticTone.Info,
         onDismissRequest = onDismissRequest,
-        title = { Text("Đổi tên truyện") },
+        title = { Text("Đổi tên chương") },
         text = {
             OutlinedTextField(
                 value = titleDraft,

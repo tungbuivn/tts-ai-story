@@ -42,7 +42,7 @@ internal fun DialogLibraryMoveStoryToCategory(
         tone = DialogSemanticTone.Info,
         onDismissRequest = onDismissRequest,
         includeDefaultDismiss = false,
-        title = { Text("Chuyển thể loại") },
+        title = { Text("Chuyển chương sang truyện khác") },
         text = {
             Column(
                 modifier =
@@ -63,7 +63,7 @@ internal fun DialogLibraryMoveStoryToCategory(
                         horizontalAlignment = Alignment.Start,
                     ) {
                         Text(
-                            text = "Truyện",
+                            text = "Chương",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f),
                         )
@@ -75,13 +75,13 @@ internal fun DialogLibraryMoveStoryToCategory(
                     }
                 }
                 Text(
-                    text = "Chọn thể loại đích",
+                    text = "Chọn truyện đích",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (moveTargets.isEmpty()) {
                     Text(
-                        text = "Tạo thêm một thể loại khác để có thể chuyển.",
+                        text = "Tạo thêm một truyện khác trong thư viện để có thể chuyển.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -134,7 +134,7 @@ internal fun DialogLibraryMoveStoryToCategory(
                                         color = MaterialTheme.colorScheme.onSurface,
                                     )
                                     Text(
-                                        text = "${cat.storyCount} truyện",
+                                        text = "${cat.storyCount} chương",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )

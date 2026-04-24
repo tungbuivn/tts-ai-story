@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Cột nút công cụ tab nhập văn: xem/chỉnh sửa, phát, dừng, (truyện web) tải lại nội dung,
- * truyện trước/sau trong thể loại, chuyển thể loại, truyện mới; một nút chuyển toàn văn / lưới đoạn khi đang chỉnh sửa. (Xuất AAC trên top bar.)
+ * chương trước/sau trong truyện, chuyển truyện (thư viện), chương mới; một nút chuyển toàn văn / lưới đoạn khi đang chỉnh sửa. (Xuất AAC trên top bar.)
  */
 @Composable
 internal fun ReaderToolbarActionsColumn(
@@ -149,7 +149,7 @@ internal fun ReaderToolbarActionsColumn(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                    contentDescription = "Truyện trước trong thể loại",
+                    contentDescription = "Chương trước trong truyện",
                 )
             }
             IconButton(
@@ -158,7 +158,7 @@ internal fun ReaderToolbarActionsColumn(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = "Truyện sau trong thể loại",
+                    contentDescription = "Chương sau trong truyện",
                 )
             }
             Spacer(modifier = Modifier.weight(1f))
@@ -168,7 +168,7 @@ internal fun ReaderToolbarActionsColumn(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.DriveFileMove,
-                    contentDescription = "Chuyển thể loại",
+                    contentDescription = "Chuyển truyện (thư viện)",
                 )
             }
             IconButton(
