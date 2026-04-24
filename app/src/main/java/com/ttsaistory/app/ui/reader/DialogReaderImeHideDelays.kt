@@ -49,7 +49,7 @@ fun DialogReaderImeHideDelays(
             Column(modifier = Modifier.padding(top = 4.dp)) {
                 Text(
                     text =
-                        "Áp dụng khi bật \"luôn ẩn bàn phím\" ở chế độ sửa theo đoạn. " +
+                        "Áp dụng khi bật \"luôn ẩn bàn phím\" ở chế độ sửa theo câu. " +
                             "Hai lần ẩn IME lặp lại sau mỗi khoảng (ms); 0 = không chờ.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

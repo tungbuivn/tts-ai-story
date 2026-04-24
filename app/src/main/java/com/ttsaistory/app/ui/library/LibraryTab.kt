@@ -56,7 +56,7 @@ fun LibraryTab(
     onToolbarCommandConsumed: () -> Unit,
     /** Truyện đang được mở/chỉnh sửa ở tab Text (null nếu không gắn file thư viện). */
     activeEditingStoryId: Long? = null,
-    onOpenStory: (Long) -> Unit,
+    onOpenStory: suspend (Long) -> Boolean,
     onLibraryChanged: () -> Unit,
     postLibraryFolderImportProgress: (OpenFileProgressUi?) -> Unit,
 ) {

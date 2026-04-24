@@ -93,7 +93,7 @@ fun AppModalNavigationDrawerScaffold(
     elevenLabsPlayJob: Job?,
     /** Loạt đọc TTS hệ thống còn utterance (không dùng [TextToSpeech.isSpeaking] cho nút Play). */
     systemTtsPlaybackActive: Boolean,
-    /** WPM ước lượng từ thời gian phát thực tế; null khi chưa đủ dữ liệu (đoạn đầu). */
+    /** WPM ước lượng từ thời gian phát thực tế; null khi chưa đủ dữ liệu (câu đầu). */
     systemTtsMeasuredWpm: Int?,
     onEditorTextChange: (String) -> Unit,
     onTextTabSpeechEngineChange: (TextTabSpeechEngine) -> Unit,
@@ -103,12 +103,14 @@ fun AppModalNavigationDrawerScaffold(
     onLibraryDataChanged: () -> Unit,
     onSavedLibraryStoryFromEditor: (Long) -> Unit,
     onRegisterParagraphDraftFlush: ((() -> Unit) -> Unit)?,
+    /** Tab Đọc & soạn: chuỗi chuẩn hoá để ghi file thư viện khi đổi chương; `null` khi huỷ đăng ký. */
+    onRegisterLibraryTabTextSerializer: (((() -> String)?) -> Unit)?,
     onRegisterExportM4aForTopBar: ((ExportM4aTopBarState?) -> Unit)?,
     exportM4aTopBar: ExportM4aTopBarState?,
     onRegisterReaderBottomNav: ((ReaderBottomNavBridge?) -> Unit)?,
     systemTtsSpeechRate: Float,
     systemTtsPitch: Float,
-    onOpenStoryFromLibrary: (Long) -> Unit,
+    onOpenStoryFromLibrary: suspend (Long) -> Boolean,
     /** Mở file văn bản qua SAF (bộ nhớ / thẻ SD). */
     onOpenTextFileFromStorage: () -> Unit,
     /** Tab Thư viện: mở SAF chọn thư mục để import thành các chương trong một truyện. */
@@ -412,6 +414,8 @@ fun AppModalNavigationDrawerScaffold(
                                 onSavedLibraryStory = onSavedLibraryStoryFromEditor,
                                 onOpenLibraryStory = onOpenStoryFromLibrary,
                                 onRegisterParagraphDraftFlush = onRegisterParagraphDraftFlush,
+                                onRegisterLibraryTabTextSerializer =
+                                    onRegisterLibraryTabTextSerializer,
                                 onRegisterExportM4aForTopBar = onRegisterExportM4aForTopBar,
                                 onRegisterReaderBottomNav = onRegisterReaderBottomNav,
                                 systemTtsSpeechRate = systemTtsSpeechRate,

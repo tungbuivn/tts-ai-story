@@ -73,9 +73,6 @@ import com.ttsaistory.app.domain.splitIntoParagraphs
 import com.ttsaistory.app.domain.sanitizeParagraphText
 import com.ttsaistory.app.model.AppEditorConstants
 import com.ttsaistory.app.model.AppPreferenceKeys
-import com.ttsaistory.app.model.clearLastReadingBookmark
-import com.ttsaistory.app.model.lastReadingBookmarkAppliesToStory
-import com.ttsaistory.app.model.putLastReadingBookmark
 import com.ttsaistory.app.model.InboundLibraryPersistResult
 import com.ttsaistory.app.model.LibraryCategoryToolbarCommand
 import com.ttsaistory.app.model.TextTabSpeechEngine
@@ -86,7 +83,6 @@ import com.ttsaistory.app.ui.library.OpenFileProgressLogUi
 import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.fonts.EditorFontConfigDialog
 import com.ttsaistory.app.ui.reader.ExportM4aTopBarState
-import com.ttsaistory.app.ui.reader.ReaderReadingProgress
 import com.ttsaistory.app.ui.SystemTtsSettingsScreen
 import com.ttsaistory.app.ui.reader.ReaderBottomNavBridge
 import com.ttsaistory.app.model.saveLastText
@@ -103,6 +99,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 
 /**
  * Mở một truyện thư viện theo id (đọc file, bookmark, tab Văn bản).
@@ -121,8 +118,39 @@ private suspend fun openLibraryStoryByIdForMainTabs(
     bumpLibraryRefresh: () -> Unit,
     bumpLibrarySyncEpoch: () -> Unit,
     onSwitchToTextTab: () -> Unit,
+    paragraphDraftFlush: (() -> Unit)?,
+    serializeOpenTabTextForLibrary: () -> String,
 ): Boolean {
     stopAllSpeechReading()
+    paragraphDraftFlush?.invoke()
+    yield()
+    val prevSid = previousActiveLibraryStoryId
+    if (prevSid != null && prevSid != storyId) {
+        val prevRowStillPresent =
+            withContext(Dispatchers.IO) { storyLibrary.getStory(prevSid) != null }
+        // Sau «ghép vào chương trước», chương nguồn đã bị xóa — không cố ghi nháp lên id đó (updateStoryTextIfExists trả false → Toast sai).
+        if (prevRowStillPresent) {
+            val body = serializeOpenTabTextForLibrary()
+            val diskCanon =
+                withContext(Dispatchers.IO) {
+                    storyLibrary.readStoryText(prevSid)?.let { canonicalTextFromRaw(it) }.orEmpty()
+                }
+            if (body != diskCanon) {
+                val ok =
+                    withContext(Dispatchers.IO) {
+                        storyLibrary.updateStoryTextIfExists(prevSid, body)
+                    }
+                if (!ok) {
+                    Toast.makeText(
+                        context,
+                        "Không lưu được chương trước khi đổi truyện.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+                bumpLibraryRefresh()
+            }
+        }
+    }
     val rowForRefresh =
         withContext(Dispatchers.IO) {
             storyLibrary.getStory(storyId)
@@ -165,18 +193,9 @@ private suspend fun openLibraryStoryByIdForMainTabs(
         setActiveLibraryStoryId(previousActiveLibraryStoryId)
         return false
     }
-    val row =
-        withContext(Dispatchers.IO) {
-            storyLibrary.getStory(storyId)
-        }
     val cleaned = canonicalTextFromRaw(body)
     setText(cleaned)
     prefs.saveLastText(cleaned)
-    val savedIdx = row?.lastSpeechSentenceIndex ?: -1
-    prefs
-        .edit()
-        .putLastReadingBookmark(savedIdx, storyId)
-        .commit()
     bumpLibrarySyncEpoch()
     val insertedNextPlaceholder =
         withContext(Dispatchers.IO) {
@@ -273,46 +292,12 @@ fun AppTabs() {
     var prevLibrarySidForAutosave by remember { mutableStateOf<Long?>(null) }
     /** Gọi [flushParagraphParentPersist] từ [ReaderTab] trước khi ghi file thư viện / nhận share. */
     var paragraphDraftFlush by remember { mutableStateOf<(() -> Unit)?>(null) }
+    /** Chuỗi chuẩn hoá từ editor tab Text (lưới + toàn văn); null khi Reader chưa đăng ký / đã dispose. */
+    var libraryTabTextSerializer by remember { mutableStateOf<(() -> String)?>(null) }
     /** Tab Text: nút xuất AAC trên top bar (ReaderTab đăng ký). */
     var exportM4aTopBar by remember { mutableStateOf<ExportM4aTopBarState?>(null) }
     /** Tab Text: cuộn đầu/cuối danh sách đoạn hoặc con trỏ đầu/cuối (chế độ toàn bộ). */
     var readerBottomNavBridge by remember { mutableStateOf<ReaderBottomNavBridge?>(null) }
-    /** Đồng bộ bookmark prefs → [ReaderReadingProgress] để mọi @Composable đọc [.intValue]. */
-    DisposableEffect(prefs, activeLibraryStoryId) {
-        val paragraphKey = AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX
-        val storyKey = AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_STORY_ID
-        val listener =
-            SharedPreferences.OnSharedPreferenceChangeListener { _, changedKey ->
-                if (changedKey == null || changedKey == paragraphKey || changedKey == storyKey) {
-                    val idx = prefs.getInt(paragraphKey, -1)
-                    ReaderReadingProgress.currentSentenceIndex0Based.intValue =
-                        if (idx >= 0 && prefs.lastReadingBookmarkAppliesToStory(activeLibraryStoryId)) {
-                            idx
-                        } else {
-                            -1
-                        }
-                }
-            }
-        prefs.registerOnSharedPreferenceChangeListener(listener)
-        val idx = prefs.getInt(paragraphKey, -1)
-        ReaderReadingProgress.currentSentenceIndex0Based.intValue =
-            if (idx >= 0 && prefs.lastReadingBookmarkAppliesToStory(activeLibraryStoryId)) {
-                idx
-            } else {
-                -1
-            }
-        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
-    }
-    LaunchedEffect(activeLibraryStoryId, librarySyncEpoch) {
-        val idx = prefs.getInt(AppPreferenceKeys.KEY_LAST_READING_PARAGRAPH_INDEX, -1)
-        ReaderReadingProgress.currentSentenceIndex0Based.intValue =
-            if (idx >= 0 && prefs.lastReadingBookmarkAppliesToStory(activeLibraryStoryId)) {
-                idx
-            } else {
-                -1
-            }
-    }
-
     // --- Mở tài liệu SAF (ZIP/EPUB/PDF: importOpened*ArchiveFromSaf) ---
     val openTextDocumentLauncher =
         rememberLauncherForActivityResult(
@@ -425,7 +410,6 @@ fun AppTabs() {
                                 )
                             text = r.cleanedText
                             prefs.saveLastText(r.cleanedText)
-                            prefs.clearLastReadingBookmark()
                             activeLibraryStoryId = r.storyId
                             librarySyncEpoch++
                             libraryRefreshTrigger++
@@ -611,7 +595,6 @@ fun AppTabs() {
         fun commitInboundPersistResult(r: InboundLibraryPersistResult) {
             text = r.cleanedText
             prefs.saveLastText(r.cleanedText)
-            prefs.clearLastReadingBookmark()
             activeLibraryStoryId = r.storyId
             librarySyncEpoch++
             libraryRefreshTrigger++
@@ -1144,8 +1127,6 @@ fun AppTabs() {
             coroutineScope.launch(Dispatchers.IO) {
                 storyLibrary.updateLastSpeechSentenceIndex(sid, idx)
             }
-        } else {
-            prefs.edit().putLastReadingBookmark(idx, null).apply()
         }
     }
 
@@ -1197,8 +1178,6 @@ fun AppTabs() {
                 withContext(Dispatchers.IO) {
                     storyLibrary.updateLastSpeechSentenceIndex(sid, speakingParagraphIndex)
                 }
-            } else {
-                prefs.edit().putLastReadingBookmark(speakingParagraphIndex, null).apply()
             }
         }
     }
@@ -1307,6 +1286,11 @@ fun AppTabs() {
                         bumpLibraryRefresh = { libraryRefreshTrigger++ },
                         bumpLibrarySyncEpoch = { librarySyncEpoch++ },
                         onSwitchToTextTab = { tabIndex = 0 },
+                        paragraphDraftFlush = paragraphDraftFlush,
+                        serializeOpenTabTextForLibrary = {
+                            libraryTabTextSerializer?.invoke()
+                                ?: canonicalTextFromRaw(text)
+                        },
                     )
                 if (!ok) {
                     tabIndex = 1
@@ -1364,12 +1348,13 @@ fun AppTabs() {
             try {
                 val finishedSid = latestActiveLibraryStoryId ?: return@launch
                 paragraphDraftFlush?.invoke()
+                yield()
+                val bodyToFinish =
+                    libraryTabTextSerializer?.invoke()
+                        ?: canonicalTextFromRaw(latestTextForLibraryAutosave)
                 val saved =
                     withContext(Dispatchers.IO) {
-                        storyLibrary.updateStoryTextIfExists(
-                            finishedSid,
-                            canonicalTextFromRaw(latestTextForLibraryAutosave),
-                        )
+                        storyLibrary.updateStoryTextIfExists(finishedSid, bodyToFinish)
                     }
                 if (!saved) {
                     activeLibraryStoryId = null
@@ -1387,7 +1372,6 @@ fun AppTabs() {
                 val cleaned = canonicalTextFromRaw(nextBody)
                 text = cleaned
                 prefs.saveLastText(cleaned)
-                prefs.clearLastReadingBookmark()
                 activeLibraryStoryId = nextRow.id
                 librarySyncEpoch++
                 libraryRefreshTrigger++
@@ -1635,9 +1619,12 @@ fun AppTabs() {
                 activeLibraryStoryId = id
                 librarySyncEpoch++
             },
-            onRegisterParagraphDraftFlush = { flush ->
-                paragraphDraftFlush = flush
-            },
+                onRegisterParagraphDraftFlush = { flush ->
+                    paragraphDraftFlush = flush
+                },
+                onRegisterLibraryTabTextSerializer = { serializer ->
+                    libraryTabTextSerializer = serializer
+                },
             onRegisterExportM4aForTopBar = { exportM4aTopBar = it },
             exportM4aTopBar = exportM4aTopBar,
             onRegisterReaderBottomNav = { bridge ->
@@ -1646,22 +1633,24 @@ fun AppTabs() {
             systemTtsSpeechRate = systemTtsSpeechRate,
             systemTtsPitch = systemTtsPitch,
             onOpenStoryFromLibrary = { storyId ->
-                coroutineScope.launch {
-                    val previousActiveLibraryStoryId = activeLibraryStoryId
-                    openLibraryStoryByIdForMainTabs(
-                        context = context,
-                        storyLibrary = storyLibrary,
-                        storyId = storyId,
-                        previousActiveLibraryStoryId = previousActiveLibraryStoryId,
-                        stopAllSpeechReading = { stopAllSpeechReading() },
-                        setActiveLibraryStoryId = { activeLibraryStoryId = it },
-                        setText = { text = it },
-                        prefs = prefs,
-                        bumpLibraryRefresh = { libraryRefreshTrigger++ },
-                        bumpLibrarySyncEpoch = { librarySyncEpoch++ },
-                        onSwitchToTextTab = { tabIndex = 0 },
-                    )
-                }
+                openLibraryStoryByIdForMainTabs(
+                    context = context,
+                    storyLibrary = storyLibrary,
+                    storyId = storyId,
+                    previousActiveLibraryStoryId = latestActiveLibraryStoryId,
+                    stopAllSpeechReading = { stopAllSpeechReading() },
+                    setActiveLibraryStoryId = { activeLibraryStoryId = it },
+                    setText = { text = it },
+                    prefs = prefs,
+                    bumpLibraryRefresh = { libraryRefreshTrigger++ },
+                    bumpLibrarySyncEpoch = { librarySyncEpoch++ },
+                    onSwitchToTextTab = { tabIndex = 0 },
+                    paragraphDraftFlush = paragraphDraftFlush,
+                    serializeOpenTabTextForLibrary = {
+                        libraryTabTextSerializer?.invoke()
+                            ?: canonicalTextFromRaw(text)
+                    },
+                )
             },
             onOpenTextFileFromStorage = {
                 openTextDocumentLauncher.launch(

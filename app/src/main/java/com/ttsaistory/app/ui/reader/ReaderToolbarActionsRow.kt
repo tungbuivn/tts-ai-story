@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Cột nút công cụ tab nhập văn: xem/chỉnh sửa, phát, dừng, (truyện web) tải lại nội dung,
- * chương trước/sau trong truyện, chuyển truyện (thư viện), chương mới; một nút chuyển toàn văn / lưới đoạn khi đang chỉnh sửa. (Xuất AAC trên top bar.)
+ * chương trước/sau trong truyện, chuyển truyện (thư viện), chương mới; một nút chuyển toàn văn / lưới câu khi đang chỉnh sửa. (Xuất AAC trên top bar.)
  */
 @Composable
 internal fun ReaderToolbarActionsColumn(
@@ -124,9 +124,9 @@ internal fun ReaderToolbarActionsColumn(
                             },
                         contentDescription =
                             if (paragraphSplitMode) {
-                                "Đang theo đoạn — chạm để toàn văn"
+                                "Đang theo câu — chạm để toàn văn"
                             } else {
-                                "Đang toàn văn — chạm để theo đoạn"
+                                "Đang toàn văn — chạm để theo câu"
                             },
                         tint = MaterialTheme.colorScheme.primary,
                     )

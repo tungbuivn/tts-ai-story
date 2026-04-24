@@ -1,14 +1,16 @@
 package com.ttsaistory.app.domain
 
-fun sanitizeParagraphText(input: String) = ParagraphTextService.sanitizeParagraphText(input)
-
-fun splitMainParagraphGroups(raw: String) = ParagraphTextService.parseStoredTextToParagraphGroups(raw)
+fun sanitizeParagraphText(input: String) = ParagraphSentenceSplitting.sanitizeParagraphText(input)
 
 fun compactParagraphGroups(groups: List<List<String>>) =
     ParagraphTextService.compactParagraphGroups(groups)
 
 fun mergeMainParagraphGroups(groups: List<List<String>>) =
     ParagraphTextService.mergeParagraphMainGroups(groups)
+
+/** Lưới ô → chuỗi lưu: mỗi ô một dòng `\n` (đồng bộ reader split). */
+fun mergeParagraphGridToStoredText(groups: List<List<String>>) =
+    ParagraphTextService.mergeParagraphGridToStoredText(groups)
 
 fun splitIntoParagraphs(raw: String) = ParagraphTextService.splitIntoFlatSentences(raw)
 
@@ -23,13 +25,19 @@ fun paragraphsForEditor(raw: String): List<String> {
     return if (parts.isEmpty()) listOf("") else parts
 }
 
-/** Nhóm đoạn chính → các ô con; luôn ít nhất một đoạn chính với một ô. */
-fun paragraphMainGroupsForEditor(raw: String): List<List<String>> {
-    val g = splitMainParagraphGroups(raw).map { row -> row.map(::sanitizeParagraphText) }
-    return if (g.isEmpty() || g.all { main -> main.all { it.isEmpty() } }) {
+/**
+ * Một hàng lưới: mỗi ô một câu (theo [ParagraphTextService.chapterParagraphs]).
+ * Phải gọi [ParagraphTextService.setChapterText] với đúng raw chương trước (thường trong cùng luồng nền).
+ */
+fun paragraphMainGroupsForEditor(): List<List<String>> {
+    val cells =
+        ParagraphTextService.chapterParagraphs.value.map(::sanitizeParagraphText).filter {
+            it.isNotEmpty()
+        }
+    return if (cells.isEmpty()) {
         listOf(listOf(""))
     } else {
-        g
+        listOf(cells)
     }
 }
 
@@ -42,7 +50,7 @@ fun textOffsetAtParagraphStart(text: String, paragraphIndex: Int) =
     ParagraphTextService.charOffsetForFlatParagraphIndex(text, paragraphIndex)
 
 fun charOffsetForEditorFlatCellInMerged(groupsText: List<List<String>>, flatIndex: Int): Int {
-    val merged = mergeMainParagraphGroups(groupsText)
+    val merged = mergeParagraphGridToStoredText(groupsText)
     val c = compactParagraphGroups(groupsText)
     if (c.isEmpty()) return 0
     var flat = 0
@@ -95,7 +103,7 @@ fun hasSpeakableParagraphFrom(paragraphs: List<String>, startIndex: Int): Boolea
 }
 
 /**
- * Chỉ số ô theo đoạn (LazyColumn) khác [splitIntoParagraphs]: danh sách TTS bỏ ô rỗng sau sanitize.
+ * Chỉ số ô theo hàng lưới (LazyColumn) khác [splitIntoParagraphs]: danh sách TTS bỏ ô rỗng sau sanitize.
  * Ánh xạ ô UI [editorUiFlat] → chỉ số dùng cho [splitIntoParagraphs] / TTS (đếm các ô có chữ trước ô đích).
  * Dùng [editorUiFlatToTtsParagraphStartIndexForFlatCells] khi đã có [cells] phẳng để tránh flatten lặp.
  */

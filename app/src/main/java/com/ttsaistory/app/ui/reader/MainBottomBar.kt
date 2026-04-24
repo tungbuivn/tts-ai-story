@@ -61,13 +61,13 @@ fun MainBottomBar(
     textTabSpeechEngine: TextTabSpeechEngine,
     /** Đang phát loạt TTS hệ thống (tab Văn bản). */
     systemTtsPlaybackActive: Boolean,
-    /** WPM ước lượng; null trong đoạn đầu chưa có đoạn nào đọc xong. */
+    /** WPM ước lượng; null trong câu đầu chưa có câu nào đọc xong. */
     systemTtsMeasuredWpm: Int?,
 ) {
     val paragraphServiceTotal by ParagraphTextService.totalItemCount.collectAsState(initial = null)
     // Không key theo [text]: tránh splitIntoParagraphs toàn văn mỗi lần gõ; chỉ khi vào tab Text
     // (lần đầu hoặc từ tab khác) hoặc đổi truyện/sync ([librarySyncEpoch], [activeLibraryStoryId]).
-    // [readerBottomNavBridge?.paragraphSplitMode]: khi bật theo đoạn, [text] có thể rỗng / chưa flush
+    // [readerBottomNavBridge?.paragraphSplitMode]: khi bật theo câu (lưới), [text] có thể rỗng / chưa flush
     // trong khi nội dung nằm ở ô — không gán 0; tổng câu lấy từ bridge (toolbar) sau split.
     // Tổng từ văn bản tab Text đồng bộ qua [ParagraphTextService.totalItemCount] (parse cập nhật).
     LaunchedEffect(
@@ -110,7 +110,7 @@ fun MainBottomBar(
     val paragraphSplit = tabIndex == 0 && navBridge?.paragraphSplitMode == true
     // Sau khi chọn truyện mới, bridge có thể vài frame vẫn giữ [ttsSpeakableSentenceTotal] của file
     // cũ; [ParagraphTextService.totalItemCount] cập nhật ngay sau parse [text] trong LaunchedEffect.
-    // Chỉ khi tách đoạn + [text] rỗng (nội dung nằm ở ô) mới ưu tiên tổng từ toolbar.
+    // Chỉ khi lưới câu + [text] rỗng (nội dung nằm ở ô) mới ưu tiên tổng từ toolbar.
     val totalSpeakable =
         when {
             tabIndex != 0 -> 0
@@ -120,7 +120,7 @@ fun MainBottomBar(
             toolbarSpeakableTotal != null -> toolbarSpeakableTotal
             else -> 0
         }
-    // Chỉ "đang tính" khi chưa có cả tổng từ service lẫn từ toolbar; không kẹt vì theo đoạn
+    // Chỉ "đang tính" khi chưa có cả tổng từ service lẫn từ toolbar; không kẹt vì chế độ lưới câu
     // trong khi service đã có — khi [text] không rỗng, tổng từ parse ([paragraphServiceTotal]) đi trước.
     val progressStillLoading =
         tabIndex == 0 &&
@@ -132,12 +132,11 @@ fun MainBottomBar(
             ReaderReadingProgress.totalSpeakableSentenceCount.intValue = totalSpeakable
         }
     }
-    val lastReadingParagraphIndex = ReaderReadingProgress.currentSentenceIndex0Based.intValue
+    val lastSpeechFromDb = navBridge?.dbLastSpeechSentenceIndex0 ?: -1
     val speaking = speakingParagraphIndex
     val fromFocusedCell = readerBottomNavBridge?.readerProgressCurrentOneBased
     val paragraphSplitEditBarShows = readerBottomNavBridge?.showParagraphSplitEditBar == true
-    // Khi không phát: bookmark (prefs, vừa persist khi Stop) phản ánh câu TTS thực tế; ô focus
-    // có thể chưa theo kịp TTS nên không được ưu tiên hơn bookmark — tránh nhảy về bookmark/ô cũ.
+    // Khi không phát: `last_speech_sentence_index` trong DB phản ánh câu TTS lưu cho chương đang mở.
     // Ngoại lệ: chế độ sửa theo ô (nối/tách/xóa) — luôn hiện chỉ số theo ô đang chọn (kể cả khi luôn ẩn phím).
     val curOneBased =
         when {
@@ -145,7 +144,7 @@ fun MainBottomBar(
                 when {
                     speaking >= 0 -> speaking + 1
                     paragraphSplitEditBarShows && fromFocusedCell != null -> fromFocusedCell
-                    lastReadingParagraphIndex >= 0 -> lastReadingParagraphIndex + 1
+                    lastSpeechFromDb >= 0 -> lastSpeechFromDb + 1
                     fromFocusedCell != null -> fromFocusedCell
                     else -> 1
                 }
@@ -154,8 +153,8 @@ fun MainBottomBar(
             speaking >= 0 -> (speaking + 1).coerceIn(1, totalSpeakable)
             paragraphSplitEditBarShows && fromFocusedCell != null ->
                 fromFocusedCell.coerceIn(1, totalSpeakable)
-            lastReadingParagraphIndex >= 0 ->
-                (lastReadingParagraphIndex + 1).coerceIn(1, totalSpeakable)
+            lastSpeechFromDb >= 0 ->
+                (lastSpeechFromDb + 1).coerceIn(1, totalSpeakable)
 
             fromFocusedCell != null ->
                 fromFocusedCell.coerceIn(1, totalSpeakable)
@@ -283,7 +282,7 @@ fun MainBottomBar(
                             IconButton(onClick = { nav.onParagraphSplitEditSplitAtCaret() }) {
                                 Icon(
                                     imageVector = Icons.Filled.HorizontalSplit,
-                                    contentDescription = "Tách đoạn tại con trỏ",
+                                    contentDescription = "Tách xuống dòng tại con trỏ",
                                 )
                             }
                             IconButton(
@@ -413,7 +412,7 @@ fun MainBottomBar(
                                         },
                                     contentDescription =
                                         if (navRow.paragraphSplitMode) {
-                                            "Cuộn lên đầu danh sách đoạn"
+                                            "Cuộn lên đầu danh sách câu"
                                         } else {
                                             "Con trỏ đầu văn bản"
                                         },
@@ -429,7 +428,7 @@ fun MainBottomBar(
                                         },
                                     contentDescription =
                                         if (navRow.paragraphSplitMode) {
-                                            "Cuộn xuống cuối danh sách đoạn"
+                                            "Cuộn xuống cuối danh sách câu"
                                         } else {
                                             "Con trỏ cuối văn bản"
                                         },
