@@ -11,6 +11,7 @@ import android.os.Looper
 import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import com.ttsaistory.app.R
+import com.ttsaistory.app.domain.TtsExportPartsSnapshot
 import com.ttsaistory.app.domain.exportFullTextToAacM4a
 import com.ttsaistory.app.model.AppEditorConstants
 import java.io.File
@@ -27,7 +28,7 @@ class TtsAudioExportForegroundService : Service() {
     companion object {
         const val ACTION_START = "com.ttsaistory.app.export.START"
         const val ACTION_CANCEL = "com.ttsaistory.app.export.CANCEL"
-        const val EXTRA_BODY_PATH = "body_path"
+        const val EXTRA_PARTS_SNAPSHOT_PATH = "parts_snapshot_path"
         const val EXTRA_OUTPUT_NAME = "output_name"
         const val EXTRA_SPEECH_RATE = "speech_rate"
         const val EXTRA_PITCH = "pitch"
@@ -68,7 +69,8 @@ class TtsAudioExportForegroundService : Service() {
             return START_NOT_STICKY
         }
 
-        val bodyPath = intent.getStringExtra(EXTRA_BODY_PATH) ?: return START_NOT_STICKY
+        val snapshotPath =
+            intent.getStringExtra(EXTRA_PARTS_SNAPSHOT_PATH) ?: return START_NOT_STICKY
         val outputName = intent.getStringExtra(EXTRA_OUTPUT_NAME) ?: return START_NOT_STICKY
         val speechRate = intent.getFloatExtra(EXTRA_SPEECH_RATE, 1f)
         val pitch = intent.getFloatExtra(EXTRA_PITCH, 1f)
@@ -89,19 +91,26 @@ class TtsAudioExportForegroundService : Service() {
             scope.launch {
                 TtsExportUiCoordinator.setPreparing()
                 try {
-                    val bodyFile = File(bodyPath)
-                    val fullText =
+                    val parts =
                         withContext(Dispatchers.IO) {
-                            bodyFile.readText(Charsets.UTF_8)
+                            val f = File(snapshotPath)
+                            try {
+                                TtsExportPartsSnapshot.decode(f.readText(Charsets.UTF_8))
+                            } finally {
+                                runCatching { f.delete() }
+                            }
                         }
-                    runCatching { bodyFile.delete() }
+
+                    if (parts.isEmpty()) {
+                        throw IllegalStateException("Snapshot xuất AAC rỗng hoặc không đọc được")
+                    }
 
                     var wavMaxForNotif = 1
                     val savedPath =
                         exportFullTextToAacM4a(
                             applicationContext,
                             null,
-                            fullText,
+                            parts,
                             outputName,
                             speechRate,
                             pitch,

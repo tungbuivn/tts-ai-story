@@ -1,6 +1,7 @@
 package com.ttsaistory.app.ui.reader
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +28,9 @@ import com.ttsaistory.app.domain.flatIndexToMainSub
 import com.ttsaistory.app.ui.fonts.ReaderTabEditorAppearance
 import com.ttsaistory.app.ui.fonts.editorLineHeightSp
 
+/** Viền ô bookmark `last_speech_sentence_index` (chỉ xem, không phát). */
+private val LastSpeechBookmarkBorderColor = Color(0xFF4527A0)
+
 /**
  * Khung hàng chung cho ô câu (nền, viền bo, highlight TTS).
  * Chế độ chỉ xem và chế độ sửa dùng cùng khung; nội dung bên trong do [content] cung cấp.
@@ -35,12 +39,21 @@ import com.ttsaistory.app.ui.fonts.editorLineHeightSp
 internal fun ReaderParagraphSplitSentenceCellRowFrame(
     textEditorChromeViewOnly: Boolean,
     highlightCurrentSpeakingParagraph: Boolean,
+    lastSpeechBookmarkBorder: Boolean,
     content: @Composable RowScope.() -> Unit,
 ) {
+    val bookmarkShape = RoundedCornerShape(6.dp)
     Row(
         modifier =
             Modifier
                 .fillMaxWidth()
+                .then(
+                    if (lastSpeechBookmarkBorder && textEditorChromeViewOnly) {
+                        Modifier.border(2.dp, LastSpeechBookmarkBorderColor, bookmarkShape)
+                    } else {
+                        Modifier
+                    },
+                )
                 .then(
                     if (textEditorChromeViewOnly) {
                         Modifier
@@ -86,6 +99,9 @@ internal fun ReaderParagraphSplitSentenceLazyGrid(
     textEditorChromeViewOnly: Boolean,
     flatCellTtsStart: IntArray,
     speakingParagraphIndex: Int,
+    dbLastSpeechSentenceIndex0: Int,
+    systemTtsPlaybackActive: Boolean,
+    elevenLabsJobActive: Boolean,
     paragraphSplitMode: Boolean,
     focusedParagraphIndex: Int,
     flatItemCount: Int,
@@ -139,6 +155,13 @@ internal fun ReaderParagraphSplitSentenceLazyGrid(
                 }
             val highlightCurrentSpeakingParagraph =
                 speakingParagraphIndex >= 0 && ttsStartAtCell == speakingParagraphIndex
+            val lastSpeechBookmarkBorder =
+                textEditorChromeViewOnly &&
+                    speakingParagraphIndex < 0 &&
+                    !systemTtsPlaybackActive &&
+                    !elevenLabsJobActive &&
+                    dbLastSpeechSentenceIndex0 >= 0 &&
+                    ttsStartAtCell == dbLastSpeechSentenceIndex0
             val paraForEdit =
                 paragraphGroupFieldValues.getOrNull(mainIdx)?.getOrNull(subIdx)
                     ?: return@items
@@ -182,6 +205,7 @@ internal fun ReaderParagraphSplitSentenceLazyGrid(
             ReaderParagraphSplitSentenceEditParagraphRow(
                 textEditorChromeViewOnly = textEditorChromeViewOnly,
                 highlightCurrentSpeakingParagraph = highlightCurrentSpeakingParagraph,
+                lastSpeechBookmarkBorder = lastSpeechBookmarkBorder,
                 textSelectionColors = paragraphCellSelectionColors,
                 paraForEdit = paraForEdit,
                 readOnlyKeyboardHidden = readOnlyCell,

@@ -15,17 +15,18 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 
 /**
- * Xuất toàn bộ văn bản thành một file .m4a (AAC): tổng hợp WAV từng đoạn TTS, hàng đợi tối đa
+ * Xuất các đoạn [parts] thành một file .m4a (AAC): tổng hợp WAV từng đoạn TTS, hàng đợi tối đa
  * [AppEditorConstants.TTS_EXPORT_WAV_QUEUE_MAX]; chỉ khi consumer lấy file khỏi hàng đợi để nén AAC
  * thì producer mới có thể `send` đoạn WAV tiếp theo (và do đó mới tổng hợp tiếp trong vòng lặp).
  *
+ * @param parts Các đoạn TTS (thường từ [ParagraphTextService.snapshotChapterParagraphsForExport] + file snapshot).
  * @param onProgress (wavDone, wavTotal, queued, aacDone, aacTotal) — gọi trên Main.
  * @param preferredTtsVoiceName Khi [mainTts] null (ví dụ export từ Foreground Service), thử gán giọng theo tên/locale.
  */
 suspend fun exportFullTextToAacM4a(
     context: Context,
     mainTts: TextToSpeech?,
-    fullText: String,
+    parts: List<String>,
     outputFileName: String,
     speechRate: Float,
     pitch: Float,
@@ -33,11 +34,10 @@ suspend fun exportFullTextToAacM4a(
     preferredTtsVoiceName: String? = null,
     preferredTtsLocaleTag: String? = null,
 ): String {
-    val parts =
-        splitIntoParagraphs(fullText).map(::sanitizeParagraphText).filter { it.isNotEmpty() }
-    if (parts.isEmpty()) throw IllegalStateException("Không có nội dung")
+    val segments = parts.map(::sanitizeParagraphText).filter { it.isNotEmpty() }
+    if (segments.isEmpty()) throw IllegalStateException("Không có nội dung")
 
-    val n = parts.size
+    val n = segments.size
     val engine = awaitTextToSpeechEngine(context)
     try {
         if (mainTts != null) {
@@ -93,7 +93,7 @@ suspend fun exportFullTextToAacM4a(
                     for (i in 0 until n) {
                         yield()
                         val tmp = File.createTempFile("wavseg_", ".wav", context.cacheDir)
-                        synthesizeToFileSuspend(engine, parts[i], tmp, "aac_export_wav_$i")
+                        synthesizeToFileSuspend(engine, segments[i], tmp, "aac_export_wav_$i")
                         channel.send(tmp)
                         produced.incrementAndGet()
                         report()

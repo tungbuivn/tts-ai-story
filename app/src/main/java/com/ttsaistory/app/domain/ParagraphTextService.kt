@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Trạng thái chương đang mở, cache parse phẳng / AAC, và **ghép** lưới / dòng lưu thư viện.
+ * Trạng thái chương đang mở, parse phẳng ([chapterParagraphs]), và **ghép** lưới / dòng lưu thư viện.
  * Logic tách chuỗi đã lưu thành **câu** nằm trong [ParagraphSentenceSplitting].
  */
 object ParagraphTextService {
@@ -23,21 +23,23 @@ object ParagraphTextService {
     private val _chapterParagraphs = MutableStateFlow<List<String>>(emptyList())
     val chapterParagraphs: StateFlow<List<String>> = _chapterParagraphs.asStateFlow()
 
+    /**
+     * Bản chụp các câu phẳng hiện tại (sau [sanitizeParagraphText], bỏ rỗng) để xuất AAC —
+     * danh sách mới, không ràng buộc [chapterParagraphs] sau khi gọi.
+     */
+    fun snapshotChapterParagraphsForExport(): List<String> =
+        _chapterParagraphs.value.map(::sanitizeParagraphText).filter { it.isNotEmpty() }
+
     fun setChapterText(text: String) {
-        _chapterText.value = text
+        
         val flat = parseStoredTextToSentences(text)
         _chapterParagraphs.value = flat
+        _chapterText.value = flat.joinToString("\n")
     }
 
     private val parseStoredTextCacheLock = Any()
     private var parseStoredTextCacheRaw: String? = null
     private var parseStoredTextCacheSentences: List<String>? = null
-
-    private var aacExportCacheFlatSentences: List<String>? = null
-
-    private fun publishAacExportFlatCache(flatSentences: List<String>) {
-        aacExportCacheFlatSentences = flatSentences
-    }
 
     private fun publishTotalItemCountFromFlat(sentences: List<String>) {
         val n = sentences.count { sanitizeParagraphText(it).isNotEmpty() }
@@ -73,14 +75,7 @@ object ParagraphTextService {
     private fun parseStoredTextToSentencesUncached(raw: String): List<String> {
         val result = ParagraphSentenceSplitting.parseStoredTextToFlatSentences(raw)
         publishTotalItemCountFromFlat(result)
-        publishAacExportFlatCache(result)
         return result
-    }
-
-    fun lastCachedFlatSentencesForAacExport(): List<String>? {
-        synchronized(parseStoredTextCacheLock) {
-            return aacExportCacheFlatSentences?.toList()
-        }
     }
 
     fun splitIntoFlatSentences(raw: String): List<String> = parseStoredTextToSentences(raw)

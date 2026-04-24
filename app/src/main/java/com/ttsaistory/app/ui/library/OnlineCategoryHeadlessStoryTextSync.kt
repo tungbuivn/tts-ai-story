@@ -11,6 +11,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.domain.canonicalTextFromRaw
+import com.ttsaistory.app.domain.ParagraphTextService
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -172,7 +173,8 @@ object OnlineCategoryHeadlessStoryTextSync {
                         baseForNext,
                     )
                 withContext(Dispatchers.IO) {
-                    repository.updateStoryText(storyId, canonicalTextFromRaw(raw))
+                    ParagraphTextService.setChapterText(raw)
+                    repository.updateStoryText(storyId, ParagraphTextService.chapterText.value)
                     repository.markOnlineStoryContentParseSuccess(storyId, nextUrl)
                     repository.ensureOnlineNextChapterStoryRow(
                         currentStoryId = storyId,

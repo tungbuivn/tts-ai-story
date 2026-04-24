@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 internal fun ReaderParagraphSplitSentenceEditParagraphRow(
     textEditorChromeViewOnly: Boolean,
     highlightCurrentSpeakingParagraph: Boolean,
+    lastSpeechBookmarkBorder: Boolean,
     textSelectionColors: TextSelectionColors,
     paraForEdit: TextFieldValue,
     readOnlyKeyboardHidden: Boolean,
@@ -62,6 +63,7 @@ internal fun ReaderParagraphSplitSentenceEditParagraphRow(
     ReaderParagraphSplitSentenceCellRowFrame(
         textEditorChromeViewOnly = textEditorChromeViewOnly,
         highlightCurrentSpeakingParagraph = highlightCurrentSpeakingParagraph,
+        lastSpeechBookmarkBorder = lastSpeechBookmarkBorder,
     ) {
         ReaderParagraphSplitSentenceEditCellContent(
             textEditorChromeViewOnly = textEditorChromeViewOnly,

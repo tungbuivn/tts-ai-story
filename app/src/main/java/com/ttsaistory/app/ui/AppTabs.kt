@@ -35,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -1049,7 +1050,8 @@ fun AppTabs() {
     /** Tổng thời gian phát các utterance đoạn đã hoàn tất (ms, [SystemClock.elapsedRealtime]). */
     var systemTtsWpmSpeechMsAccum by remember { mutableLongStateOf(0L) }
     var systemTtsWpmWordsAccum by remember { mutableIntStateOf(0) }
-    var systemTtsWpmUtteranceStartElapsedMs by remember { mutableStateOf<Long?>(null) }
+    /** Thời điểm [SystemClock.elapsedRealtime] khi bắt đầu từng đoạn `tts_para_*` — tránh ghi đè khi nhiều utterance chồng hàng đợi. */
+    val systemTtsWpmStartElapsedByParagraph = remember { mutableStateMapOf<Int, Long>() }
     /** Làm mới UI WPM định kỳ khi đang phát. */
     var systemTtsWpmLiveTick by remember { mutableIntStateOf(0) }
     /** Giữ audio focus khi đọc TTS hệ thống — một số máy tắt màn hình không chuyển đoạn nếu app không có focus. */
@@ -1244,7 +1246,7 @@ fun AppTabs() {
         systemTtsWpmOrigToText = emptyMap()
         systemTtsWpmSpeechMsAccum = 0L
         systemTtsWpmWordsAccum = 0
-        systemTtsWpmUtteranceStartElapsedMs = null
+        systemTtsWpmStartElapsedByParagraph.clear()
         if (persistBookmarkOnStop) {
             persistBookmarkIfSpeaking()
         }
@@ -1313,7 +1315,7 @@ fun AppTabs() {
             systemTtsWpmOrigToText = jobs.associate { it.first to it.second }
             systemTtsWpmSpeechMsAccum = 0L
             systemTtsWpmWordsAccum = 0
-            systemTtsWpmUtteranceStartElapsedMs = null
+            systemTtsWpmStartElapsedByParagraph.clear()
         }
         val speechCallbacks =
             ParagraphSpeechSequenceCallbacks(
@@ -1401,25 +1403,45 @@ fun AppTabs() {
         } else {
             // TTS gọi listener trên luồng nền; Compose mutableState / auto-advance phải chạy trên main.
             val progressHandler = Handler(Looper.getMainLooper())
+            /** Cập nhật DB ngay khi xong một câu (trước khi [speakingParagraphIndex] tạm = -1 giữa các utterance). */
+            fun persistSpeechBookmarkOnParagraphUtteranceClosed(
+                paraIdx: Int,
+                storyRemainingBefore: Int,
+            ) {
+                if (textTabSpeechEngine != TextTabSpeechEngine.System) return
+                if (storyRemainingBefore < 1) return
+                val sid = latestActiveLibraryStoryId ?: return
+                val bookmark =
+                    if (storyRemainingBefore > 1) {
+                        (paraIdx + 1).coerceAtLeast(0)
+                    } else {
+                        paraIdx
+                    }
+                coroutineScope.launch(Dispatchers.IO) {
+                    storyLibrary.updateLastSpeechSentenceIndex(sid, bookmark)
+                }
+            }
             val utteranceSink =
                 object : SystemTtsUtteranceProgressSink {
                     override fun onUtteranceStart(utteranceId: String?) {
                         systemTtsUtteranceDepth++
-                        speakingParagraphIndex = parseTtsParagraphIndex(utteranceId) ?: -1
-                        if (parseTtsParagraphIndex(utteranceId) != null) {
-                            systemTtsWpmUtteranceStartElapsedMs = SystemClock.elapsedRealtime()
+                        val p = parseTtsParagraphIndex(utteranceId)
+                        speakingParagraphIndex = p ?: -1
+                        if (p != null) {
+                            systemTtsWpmStartElapsedByParagraph[p] = SystemClock.elapsedRealtime()
                         }
                     }
 
                     override fun onUtteranceDone(utteranceId: String?) {
                         val paraIdx = parseTtsParagraphIndex(utteranceId)
+                        val storyRemainingBefore =
+                            if (paraIdx != null) systemTtsStoryUtterancesRemaining else 0
                         if (paraIdx != null) {
-                            val start = systemTtsWpmUtteranceStartElapsedMs
+                            val start = systemTtsWpmStartElapsedByParagraph.remove(paraIdx)
                             val now = SystemClock.elapsedRealtime()
                             if (start != null) {
                                 systemTtsWpmSpeechMsAccum += (now - start).coerceAtLeast(0L)
                             }
-                            systemTtsWpmUtteranceStartElapsedMs = null
                             val spoken = systemTtsWpmOrigToText[paraIdx]
                             if (!spoken.isNullOrEmpty()) {
                                 systemTtsWpmWordsAccum += wordCountForTtsPlaybackWpm(spoken)
@@ -1429,6 +1451,12 @@ fun AppTabs() {
                             (systemTtsUtteranceDepth - 1).coerceAtLeast(0)
                         speakingParagraphIndex = -1
                         val wasParagraph = parseTtsParagraphIndex(utteranceId) != null
+                        if (wasParagraph && paraIdx != null) {
+                            persistSpeechBookmarkOnParagraphUtteranceClosed(
+                                paraIdx,
+                                storyRemainingBefore,
+                            )
+                        }
                         if (wasParagraph && systemTtsStoryUtterancesRemaining > 0) {
                             systemTtsStoryUtterancesRemaining--
                         }
@@ -1449,12 +1477,11 @@ fun AppTabs() {
                     override fun onUtteranceError(utteranceId: String?) {
                         val paraIdxErr = parseTtsParagraphIndex(utteranceId)
                         if (paraIdxErr != null) {
-                            val start = systemTtsWpmUtteranceStartElapsedMs
+                            val start = systemTtsWpmStartElapsedByParagraph.remove(paraIdxErr)
                             val now = SystemClock.elapsedRealtime()
                             if (start != null) {
                                 systemTtsWpmSpeechMsAccum += (now - start).coerceAtLeast(0L)
                             }
-                            systemTtsWpmUtteranceStartElapsedMs = null
                             val spoken = systemTtsWpmOrigToText[paraIdxErr]
                             if (!spoken.isNullOrEmpty()) {
                                 systemTtsWpmWordsAccum += wordCountForTtsPlaybackWpm(spoken)
@@ -1504,15 +1531,29 @@ fun AppTabs() {
 
     val systemTtsMeasuredWpm: Int? = run {
         systemTtsWpmLiveTick // ghim recompose theo tick khi đang phát
+        systemTtsWpmStartElapsedByParagraph.size // ghim khi bắt đầu đoạn mới (trước onDone)
+        speakingParagraphIndex // cập nhật khi chuyển câu (ước lượng câu đầu)
         if (textTabSpeechEngine != TextTabSpeechEngine.System || !systemTtsPlaybackActive) {
             null
         } else {
             val now = SystemClock.elapsedRealtime()
             val partial =
-                systemTtsWpmUtteranceStartElapsedMs?.let { (now - it).coerceAtLeast(0L) } ?: 0L
+                systemTtsWpmStartElapsedByParagraph.values
+                    .minOrNull()
+                    ?.let { t -> (now - t).coerceAtLeast(0L) }
+                    ?: 0L
             val denom = (systemTtsWpmSpeechMsAccum + partial).coerceAtLeast(1L)
-            if (systemTtsWpmWordsAccum <= 0) null
-            else ((systemTtsWpmWordsAccum * 60000L + denom / 2) / denom).toInt()
+            when {
+                systemTtsWpmWordsAccum > 0 ->
+                    ((systemTtsWpmWordsAccum * 60000L + denom / 2) / denom).toInt()
+                speakingParagraphIndex >= 0 && partial >= 400L -> {
+                    val txt = systemTtsWpmOrigToText[speakingParagraphIndex]
+                    val w = if (txt.isNullOrBlank()) 0 else wordCountForTtsPlaybackWpm(txt)
+                    if (w <= 0) null
+                    else ((w * 60000L + denom / 2) / denom).toInt()
+                }
+                else -> null
+            }
         }
     }
 

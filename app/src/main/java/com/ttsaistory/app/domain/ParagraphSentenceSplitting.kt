@@ -8,8 +8,9 @@ import kotlin.text.CharCategory
  * chuẩn hóa khối [sanitizeParagraphText], ranh giới ký tự trong raw — tách khỏi [ParagraphTextService] (state, cache, AAC).
  */
 object ParagraphSentenceSplitting {
+    /** Sau chấm ranh giới: chữ, khoảng trắng, kết chuỗi, hoặc `-` (gạch đầu đoạn sau `. -`). */
     private val singleSentenceEndDot =
-        Regex("""(?<![.])\.(?![.])(?=\p{L}|\s|$)""")
+        Regex("""(?<![.])\.(?![.])(?=\p{L}|\s|-|$)""")
 
     /** Từ chữ cái ngay trước `.` (không kéo qua ký tự không phải chữ). */
     private fun lettersTokenEndingAt(s: String, lastLetterIndex: Int): String {
@@ -114,6 +115,9 @@ object ParagraphSentenceSplitting {
         return out.toString()
     }
 
+    /** Sau các dấu này + khoảng trắng + `-` là gạch đoạn thoại, không gộp như markdown. */
+    private val sentenceEndBeforeHyphenDash = setOf('.', '!', '?')
+
     private fun removeWhitespaceAdjacentToMarkdownMarkers(s: String): String {
         val out = StringBuilder(s.length)
         var i = 0
@@ -122,6 +126,18 @@ object ParagraphSentenceSplitting {
             if (c.isWhitespace()) {
                 val prev = out.lastOrNull()
                 val next = s.getOrNull(i + 1)
+                if (next == '-' && prev != null && prev in sentenceEndBeforeHyphenDash) {
+                    out.append(c)
+                    i++
+                    continue
+                }
+                if (prev == '-' && next != null && i + 1 < s.length &&
+                    Character.isLetter(s.codePointAt(i + 1))
+                ) {
+                    out.append(c)
+                    i++
+                    continue
+                }
                 if ((prev != null && prev in markdownLikeMarkerChars) ||
                     (next != null && next in markdownLikeMarkerChars)
                 ) {
@@ -236,7 +252,8 @@ object ParagraphSentenceSplitting {
 
     /**
      * Với mỗi chấm đơn ranh giới câu: bỏ khoảng trắng ngay trước và sau dấu `.`;
-     * nếu sau chấm (sau khi bỏ khoảng trắng) là chữ Unicode thì đảm bảo có đúng một khoảng trắng giữa `.` và chữ.
+     * nếu sau chấm (sau khi bỏ khoảng trắng) là chữ Unicode thì đảm bảo có đúng một khoảng trắng giữa `.` và chữ;
+     * nếu là `-` (gạch sau dấu câu) thì giữ `. -` để [singleSentenceEndDot] vẫn nhận ranh giới câu.
      */
     private fun normalizeSingleSentenceDotWhitespace(s: String): String {
         if (s.isEmpty()) return s
@@ -250,11 +267,19 @@ object ParagraphSentenceSplitting {
                 sb.append('.')
                 i++
                 while (i < s.length && s[i].isWhitespace()) i++
-                if (i < s.length && isUnicodeLetterCodePointAt(s, i)) {
-                    sb.append(' ')
-                    val cp = s.codePointAt(i)
-                    sb.appendCodePoint(cp)
-                    i += Character.charCount(cp)
+                when {
+                    i < s.length && isUnicodeLetterCodePointAt(s, i) -> {
+                        sb.append(' ')
+                        val cp = s.codePointAt(i)
+                        sb.appendCodePoint(cp)
+                        i += Character.charCount(cp)
+                    }
+                    i < s.length && s[i] == '-' -> {
+                        sb.append(' ')
+                        sb.append('-')
+                        i++
+                    }
+                    else -> {}
                 }
                 continue
             }
@@ -278,10 +303,16 @@ object ParagraphSentenceSplitting {
      * chấm đơn ranh giới câu (không `..`/`...`): bỏ khoảng trắng quanh `.`, nếu sau chấm là chữ Unicode thì chèn một khoảng trắng (vd. `a.b` → `a. b`).
      * Dấu ngoặc kép Unicode (“ ” « » …) được giữ như ký tự hợp lệ (paste từ nguồn khác).
      * Sau các bước trên: tại **đầu câu** (đầu khối, sau `|`, sau `.` `!` `?`, sau xuống dòng), nếu gặp `-` rồi ngay một ký tự không phải khoảng trắng thì chèn một khoảng trắng (vd. `-Chào` → `- Chào`) — chạy cuối để không bị bước markdown gỡ khoảng kề `-`.
-     * Trước hết: [stripHyperlinksAndUrlLiterals] (http(s)/ftp/www/mailto, markdown, `<a>`, `<url>`).
+     * Trước hết: [stripHyperlinksAndUrlLiterals] (http(s)/ftp/www/mailto, markdown, `<a>`, `<url>`);
+     * `.- ` trước một ký tự → `. - ` (ranh giới câu tại chấm, giữ gạch đầu đoạn sau).
      */
     fun sanitizeParagraphText(input: String): String {
-        val linkStripped = stripHyperlinksAndUrlLiterals(input)
+        val stripped = stripHyperlinksAndUrlLiterals(input)
+        val linkStripped =
+            dotHyphenSpaceSentenceBreak.replace(
+                punctuatedVvBeforeEllipsis.replace(stripped, "..."),
+                ". - ",
+            )
         val sb = StringBuilder(linkStripped.length)
         var pendingSpace = false
         for (ch in linkStripped) {
@@ -382,6 +413,19 @@ object ParagraphSentenceSplitting {
 
     /** Hai chữ Unicode (bỏ số / ký tự khác) hai bên `-`. */
     private val HyphenBetweenUnicodeLetters = Regex("""(?<=\p{L})-(?=\p{L})""")
+
+    /**
+     * `v.v` / `v.v.` sau dấu câu, khoảng trắng tùy chọn, rồi `...` hoặc dấu `…` — gộp thành `...`
+     * (tránh tách câu lạc quanh "v.v").
+     */
+    private val punctuatedVvBeforeEllipsis =
+        Regex("""(?i)(?<=[.,;:!?…、，。？）」』])\s*v\.v\.?\s*(?:\.{3}|…+)""")
+
+    /**
+     * `.- ` (chấm + gạch + khoảng) rồi còn ký tự phía sau — hết câu tại chấm, chuẩn hóa thành `. - `
+     * để [splitOnSingleSentenceEndDots] tách được hai câu mà vẫn giữ gạch nói trước câu sau.
+     */
+    private val dotHyphenSpaceSentenceBreak = Regex("""\.- (?=.)""")
 
     /** Markdown `![alt](url)` — giữ mô tả (có thể rỗng), bỏ URL. */
     private val reMarkdownImage = Regex("""!\[([^\]]*)\]\([^)]*\)""")

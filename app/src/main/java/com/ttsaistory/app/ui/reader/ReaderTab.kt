@@ -85,6 +85,7 @@ import com.ttsaistory.app.domain.hasSpeakableParagraphFrom
 import com.ttsaistory.app.domain.mergeParagraphGridToStoredText
 import com.ttsaistory.app.domain.mergeParagraphs
 import com.ttsaistory.app.domain.ParagraphTextService
+import com.ttsaistory.app.domain.TtsExportPartsSnapshot
 import com.ttsaistory.app.domain.paragraphIndexAtTextOffset
 import com.ttsaistory.app.domain.paragraphMainGroupsForEditor
 import com.ttsaistory.app.domain.paragraphsForEditor
@@ -113,6 +114,37 @@ import kotlinx.coroutines.yield
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Nối từng ô lưới câu bằng `\n` — đưa vào [ParagraphTextService.setChapterText] (parse/sanitize nội bộ). */
+private fun joinedSplitCellLinesForChapterService(
+    fieldGroups: List<List<TextFieldValue>>,
+): String = fieldGroups.flatMap { row -> row.map { it.text } }.joinToString("\n")
+
+private suspend fun clampLastSpeechSentenceIndexToParsedParagraphs(
+    libraryRepository: StoryLibraryRepository,
+    storyId: Long,
+    onIndexIfUpdated: (Int) -> Unit,
+) {
+    val snap = ParagraphTextService.snapshotChapterParagraphsForExport()
+    val updatedDb =
+        withContext(Dispatchers.IO) {
+            val cur = libraryRepository.getStory(storyId)?.lastSpeechSentenceIndex ?: -1
+            when {
+                snap.isEmpty() && cur >= 0 -> {
+                    libraryRepository.updateLastSpeechSentenceIndex(storyId, -1)
+                    -1
+                }
+                snap.isNotEmpty() && cur > snap.lastIndex -> {
+                    libraryRepository.updateLastSpeechSentenceIndex(storyId, snap.lastIndex)
+                    snap.lastIndex
+                }
+                else -> null
+            }
+        }
+    if (updatedDb != null) {
+        onIndexIfUpdated(updatedDb)
+    }
+}
 
 /**
  * Ô phẳng lưới split: ưu tiên [speakingParagraphIndex]; khi không phát dùng
@@ -198,7 +230,6 @@ fun ReaderTab(
     var dbLastSpeechSentenceIndex0 by remember { mutableIntStateOf(-1) }
     val paragraphSplitPageSize = AppEditorConstants.PARAGRAPH_SPLIT_PAGE_SIZE
     var paragraphSplitPageIndex by rememberSaveable { mutableIntStateOf(0) }
-    var playToolbarParagraphsDebounced by remember { mutableStateOf(emptyList<String>()) }
     /** Đồng bộ với [ParagraphTextService.totalItemCount] (cập nhật trong [splitIntoParagraphs] / parse). */
     val paragraphToolbarTtsTotal by ParagraphTextService.totalItemCount.collectAsState(initial = null)
     var toolbarTtsSplitWorking by remember { mutableStateOf(false) }
@@ -508,7 +539,6 @@ fun ReaderTab(
             snapshotFlow { text }
                 .collectLatest { snap ->
                     if (snap.isEmpty()) {
-                        playToolbarParagraphsDebounced = emptyList()
                         withContext(Dispatchers.Default) { splitIntoParagraphs("") }
                         toolbarTtsSplitWorking = false
                         return@collectLatest
@@ -524,7 +554,6 @@ fun ReaderTab(
                             AnrDiagLog.i("ReaderTab splitIntoParagraphs(fullTextToolbar) dropped")
                             return@collectLatest
                         }
-                        playToolbarParagraphsDebounced = paras
                         AnrDiagLog.end(
                             "ReaderTab splitIntoParagraphs(fullTextToolbar) n=${paras.size}",
                             t0,
@@ -546,7 +575,6 @@ fun ReaderTab(
                     withContext(Dispatchers.Default) { mergeParagraphGridToStoredText(rows1) }
                 if (!paragraphSplitMode) return@collectLatest
                 if (merged.isEmpty()) {
-                    playToolbarParagraphsDebounced = emptyList()
                     if (latestParentText.isEmpty()) {
                         withContext(Dispatchers.Default) { splitIntoParagraphs("") }
                     }
@@ -576,7 +604,6 @@ fun ReaderTab(
                         )
                         return@collectLatest
                     }
-                    playToolbarParagraphsDebounced = paras
                     AnrDiagLog.end(
                         "ReaderTab splitIntoParagraphs(mergedToolbar) n=${paras.size}",
                         t0,
@@ -624,11 +651,8 @@ fun ReaderTab(
     fun enqueueTtsExport() {
         val run: () -> Unit = {
             scope.launch {
-                val exportBody =
-                    ParagraphTextService.lastCachedFlatSentencesForAacExport()
-                        ?.joinToString("\n")
-                        .orEmpty()
-                if (exportBody.isBlank()) {
+                val exportParts = ParagraphTextService.snapshotChapterParagraphsForExport()
+                if (exportParts.isEmpty()) {
                     Toast.makeText(
                         ctx,
                         "Không có nội dung để xuất",
@@ -636,12 +660,15 @@ fun ReaderTab(
                     ).show()
                     return@launch
                 }
-                val bodyFile =
+                val snapshotFile =
                     withContext(Dispatchers.IO) {
                         val f =
-                            File(ctx.cacheDir, "tts_export_body_${System.currentTimeMillis()}.txt")
+                            File(ctx.cacheDir, "tts_export_parts_${System.currentTimeMillis()}.json")
                         try {
-                            f.writeText(exportBody, Charsets.UTF_8)
+                            f.writeText(
+                                TtsExportPartsSnapshot.encode(exportParts),
+                                Charsets.UTF_8,
+                            )
                             f
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
@@ -654,14 +681,14 @@ fun ReaderTab(
                             null
                         }
                     }
-                if (bodyFile == null) return@launch
+                if (snapshotFile == null) return@launch
                 val out = "tts_story_${System.currentTimeMillis()}.m4a"
                 val i =
                     Intent(ctx, TtsAudioExportForegroundService::class.java).apply {
                         action = TtsAudioExportForegroundService.ACTION_START
                         putExtra(
-                            TtsAudioExportForegroundService.EXTRA_BODY_PATH,
-                            bodyFile.absolutePath,
+                            TtsAudioExportForegroundService.EXTRA_PARTS_SNAPSHOT_PATH,
+                            snapshotFile.absolutePath,
                         )
                         putExtra(TtsAudioExportForegroundService.EXTRA_OUTPUT_NAME, out)
                         putExtra(TtsAudioExportForegroundService.EXTRA_SPEECH_RATE, systemTtsSpeechRate)
@@ -753,6 +780,16 @@ fun ReaderTab(
         if (!paragraphSplitMode) return@LaunchedEffect
         flushParagraphParentPersist()
         if (!textEditorChromeViewOnly || !paragraphSplitMode) return@LaunchedEffect
+        val joinedForChapter = joinedSplitCellLinesForChapterService(paragraphGroupFieldValues)
+        withContext(Dispatchers.Default) {
+            ParagraphTextService.setChapterText(joinedForChapter)
+        }
+        val sidClamp = activeLibraryStoryId
+        if (sidClamp != null && sidClamp > 0L) {
+            clampLastSpeechSentenceIndexToParsedParagraphs(libraryRepository, sidClamp) {
+                dbLastSpeechSentenceIndex0 = it
+            }
+        }
         val cellCount = paragraphGroupFieldValues.sumOf { it.size }
         val t0 =
             AnrDiagLog.begin(
@@ -770,6 +807,21 @@ fun ReaderTab(
         prevParagraphSplitMode = true
         paragraphGridLastAppliedLibraryEpoch = librarySyncEpoch
         AnrDiagLog.end("ReaderTab preserveSplitCells(leaveEditViewOnly) done", t0)
+    }
+
+    /** Đang sửa ô: đổi chương / sync thư viện — cập nhật [ParagraphTextService] từ lưới (nối `\n`), không merge lưu kho. */
+    LaunchedEffect(activeLibraryStoryId, librarySyncEpoch) {
+        if (!paragraphSplitMode || textEditorChromeViewOnly) return@LaunchedEffect
+        val sid = activeLibraryStoryId ?: return@LaunchedEffect
+        if (sid <= 0L) return@LaunchedEffect
+        if (paragraphGroupFieldValues.sumOf { it.size } == 0) return@LaunchedEffect
+        val joined = joinedSplitCellLinesForChapterService(paragraphGroupFieldValues)
+        withContext(Dispatchers.Default) {
+            ParagraphTextService.setChapterText(joined)
+        }
+        clampLastSpeechSentenceIndexToParsedParagraphs(libraryRepository, sid) {
+            dbLastSpeechSentenceIndex0 = it
+        }
     }
 
     /** Đồng bộ prefs bookmark TTS khi ô UI (flat) đổi — chỉ dùng ánh xạ ô→TTS, không merge/split cả văn bản (tránh ANR). */
@@ -1037,7 +1089,6 @@ fun ReaderTab(
                 splitEditFocusFingerprint,
                 paragraphToolbarTtsTotal?.toString() ?: "n",
                 toolbarTtsSplitWorking,
-                playToolbarParagraphsDebounced.size,
                 webPrefetchChapterQueueLines.size,
                 activeStoryHasWebUrl,
                 webStoryQueueTargetStoryId?.toString() ?: "null",
@@ -1409,14 +1460,11 @@ fun ReaderTab(
             val mergedFromLib =
                 withContext(Dispatchers.Default) { mergeParagraphGridToStoredText(segs) }
             if (mergedFromLib.isEmpty()) {
-                playToolbarParagraphsDebounced = emptyList()
                 if (text.isEmpty()) {
                     withContext(Dispatchers.Default) { splitIntoParagraphs("") }
                 }
             } else {
-                val paras =
-                    withContext(Dispatchers.Default) { splitIntoParagraphs(mergedFromLib) }
-                playToolbarParagraphsDebounced = paras
+                withContext(Dispatchers.Default) { splitIntoParagraphs(mergedFromLib) }
             }
         } finally {
             toolbarTtsSplitWorking = false
@@ -1510,14 +1558,11 @@ fun ReaderTab(
                     val mergedR =
                         withContext(Dispatchers.Default) { mergeParagraphGridToStoredText(rows) }
                     if (mergedR.isEmpty()) {
-                        playToolbarParagraphsDebounced = emptyList()
                         if (latestParentText.isEmpty()) {
                             withContext(Dispatchers.Default) { splitIntoParagraphs("") }
                         }
                     } else {
-                        val paras =
-                            withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
-                        playToolbarParagraphsDebounced = paras
+                        withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
                     }
                 } finally {
                     toolbarTtsSplitWorking = false
@@ -1549,20 +1594,57 @@ fun ReaderTab(
                     val mergedR =
                         withContext(Dispatchers.Default) { mergeParagraphGridToStoredText(rows) }
                     if (mergedR.isEmpty()) {
-                        playToolbarParagraphsDebounced = emptyList()
                         if (latestParentText.isEmpty()) {
                             withContext(Dispatchers.Default) { splitIntoParagraphs("") }
                         }
                     } else {
-                        val paras =
-                            withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
-                        playToolbarParagraphsDebounced = paras
+                        withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
                     }
                 } finally {
                     toolbarTtsSplitWorking = false
                 }
             }
         }
+    }
+
+    /**
+     * Chế độ lưới + chỉ xem: lưới bám [ParagraphTextService.chapterParagraphs] (debounce, bỏ qua nếu trùng ô)
+     * để headless sync / parse nền không cần đổi [text] vẫn cập nhật UI.
+     */
+    LaunchedEffect(paragraphSplitMode, textEditorChromeViewOnly) {
+        if (!paragraphSplitMode || !textEditorChromeViewOnly) return@LaunchedEffect
+        ParagraphTextService.chapterParagraphs
+            .debounce(48L)
+            .collectLatest { flat ->
+                val cells =
+                    flat.filter { it.isNotEmpty() }
+                val rowTexts = if (cells.isEmpty()) listOf("") else cells
+                val curTexts = paragraphGroupFieldValues.flatMap { r -> r.map { it.text } }
+                if (curTexts == rowTexts) return@collectLatest
+                val newGroups =
+                    listOf(
+                        rowTexts.map { s ->
+                            TextFieldValue(text = s, selection = TextRange(s.length))
+                        },
+                    )
+                paragraphGroupFieldValues = newGroups
+                // toolbarTtsSplitWorking = true
+                // try {
+                //     // val mergedR =
+                //     //     withContext(Dispatchers.Default) {
+                //     //         mergeParagraphGridToStoredText(
+                //     //             newGroups.map { r -> r.map { it.text } },
+                //     //         )
+                //     //     }
+                //     // if (mergedR.isEmpty()) {
+                //     //     withContext(Dispatchers.Default) { splitIntoParagraphs("") }
+                //     // } else {
+                //     //     withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
+                //     // }
+                // } finally {
+                //     toolbarTtsSplitWorking = false
+                // }
+            }
     }
 
     /** Lưới câu + vừa tắt chỉ xem: cập nhật tổng câu bottom bar (không chạy khi đang gõ vì [textEditorChromeViewOnly] không đổi). */
@@ -1575,13 +1657,11 @@ fun ReaderTab(
             val mergedR = withContext(Dispatchers.Default) { mergeParagraphGridToStoredText(rows) }
             if (textEditorChromeViewOnly || !paragraphSplitMode) return@LaunchedEffect
             if (mergedR.isEmpty()) {
-                playToolbarParagraphsDebounced = emptyList()
                 if (latestParentText.isEmpty()) {
                     withContext(Dispatchers.Default) { splitIntoParagraphs("") }
                 }
             } else {
-                val paras = withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
-                playToolbarParagraphsDebounced = paras
+                withContext(Dispatchers.Default) { splitIntoParagraphs(mergedR) }
             }
         } finally {
             toolbarTtsSplitWorking = false
@@ -2198,6 +2278,9 @@ fun ReaderTab(
                 textEditorChromeViewOnly = textEditorChromeViewOnly,
                 flatCellTtsStart = flatCellTtsStart,
                 speakingParagraphIndex = speakingParagraphIndex,
+                dbLastSpeechSentenceIndex0 = dbLastSpeechSentenceIndex0,
+                systemTtsPlaybackActive = systemTtsPlaybackActive,
+                elevenLabsJobActive = elevenLabsJobActive,
                 paragraphSplitMode = paragraphSplitMode,
                 focusedParagraphIndex = readerSplitFlatFocusIndex,
                 flatItemCount = flatItemCount,
