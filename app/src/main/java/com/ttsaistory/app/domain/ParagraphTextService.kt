@@ -1,5 +1,6 @@
 package com.ttsaistory.app.domain
 
+import com.ttsaistory.app.data.StoryLibraryRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,11 +31,26 @@ object ParagraphTextService {
     fun snapshotChapterParagraphsForExport(): List<String> =
         _chapterParagraphs.value.map(::sanitizeParagraphText).filter { it.isNotEmpty() }
 
-    fun setChapterText(text: String) {
-        
-        val flat = parseStoredTextToSentences(text)
+    /**
+     * Parse [text] → [chapterParagraphs] / [chapterText] (nối ô phẳng bằng `\n`).
+     * Nếu [chapterId] và [libraryRepository] có mà chuỗi sau parse khác [text] (chỉ chuẩn hóa `\r\n`),
+     * ghi lại nội dung chuẩn vào thư viện (file + DB).
+     */
+    fun setChapterText(
+        text: String,
+        chapterId: Long? = null,
+        libraryRepository: StoryLibraryRepository? = null,
+    ) {
+        val textNorm = text.replace("\r\n", "\n").replace('\r', '\n')
+        val flat = parseStoredTextToSentences2(textNorm)
+        val canonical = flat.joinToString("\n")
         _chapterParagraphs.value = flat
-        _chapterText.value = flat.joinToString("\n")
+        _chapterText.value = canonical
+        val sid = chapterId
+        val repo = libraryRepository
+        if (sid != null && sid > 0L && repo != null && canonical != textNorm) {
+            repo.updateStoryTextIfExists(sid, canonical)
+        }
     }
 
     private val parseStoredTextCacheLock = Any()
@@ -58,7 +74,7 @@ object ParagraphTextService {
     fun sentencesFromParagraphOrWhole(paragraph: String): List<String> =
         ParagraphSentenceSplitting.sentencesFromParagraphOrWhole(paragraph)
 
-    private fun parseStoredTextToSentences(raw: String): List<String> {
+    private fun parseStoredTextToSentences2(raw: String): List<String> {
         synchronized(parseStoredTextCacheLock) {
             val cachedRaw = parseStoredTextCacheRaw
             val flat = parseStoredTextCacheSentences
@@ -70,6 +86,12 @@ object ParagraphTextService {
             parseStoredTextCacheSentences = resultFlat
             return resultFlat
         }
+    }
+
+    /** khi download new chapter cũng cần chuẩn hóa để ghi vào db */
+    fun parseStoredTextToSentences(raw: String): List<String> {
+        val resultFlat = parseStoredTextToSentencesUncached(raw)
+        return resultFlat
     }
 
     private fun parseStoredTextToSentencesUncached(raw: String): List<String> {

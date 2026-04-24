@@ -173,8 +173,12 @@ object OnlineCategoryHeadlessStoryTextSync {
                         baseForNext,
                     )
                 withContext(Dispatchers.IO) {
-                    ParagraphTextService.setChapterText(raw)
-                    repository.updateStoryText(storyId, ParagraphTextService.chapterText.value)
+
+                    val flat =    ParagraphTextService.parseStoredTextToSentences(raw)
+                    val canonical = flat.joinToString("\n")
+                    // cập nhật canonical vào nội dung truyện , không gọi setChapterText để tránh đè vào chapter hiện tại
+                    repository.updateStoryText(storyId, canonical)
+                 
                     repository.markOnlineStoryContentParseSuccess(storyId, nextUrl)
                     repository.ensureOnlineNextChapterStoryRow(
                         currentStoryId = storyId,

@@ -27,7 +27,8 @@ fun paragraphsForEditor(raw: String): List<String> {
 
 /**
  * Một hàng lưới: mỗi ô một câu (theo [ParagraphTextService.chapterParagraphs]).
- * Phải gọi [ParagraphTextService.setChapterText] với đúng raw chương trước (thường trong cùng luồng nền).
+ * Phải gọi [ParagraphTextService.setChapterText] với đúng raw chương trước (thường trong cùng luồng nền);
+ * có thể truyền thêm `chapterId` và repository để ghi thư viện khi chuỗi sau parse khác raw.
  */
 fun paragraphMainGroupsForEditor(): List<List<String>> {
     val cells =

@@ -1542,15 +1542,18 @@ fun AppTabs() {
                     .minOrNull()
                     ?.let { t -> (now - t).coerceAtLeast(0L) }
                     ?: 0L
-            val denom = (systemTtsWpmSpeechMsAccum + partial).coerceAtLeast(1L)
+            // Chỉ các đoạn đã onDone mới có từ trong wordsAccum — mẫu số phải là thời gian tương ứng
+            // (speechMsAccum). Cộng partial (đoạn đang đọc) làm tử không đổi → WPM sai thấp.
+            val msCompleted = systemTtsWpmSpeechMsAccum.coerceAtLeast(1L)
+            val denomInProgress = partial.coerceAtLeast(1L)
             when {
                 systemTtsWpmWordsAccum > 0 ->
-                    ((systemTtsWpmWordsAccum * 60000L + denom / 2) / denom).toInt()
+                    ((systemTtsWpmWordsAccum * 60000L + msCompleted / 2) / msCompleted).toInt()
                 speakingParagraphIndex >= 0 && partial >= 400L -> {
                     val txt = systemTtsWpmOrigToText[speakingParagraphIndex]
                     val w = if (txt.isNullOrBlank()) 0 else wordCountForTtsPlaybackWpm(txt)
                     if (w <= 0) null
-                    else ((w * 60000L + denom / 2) / denom).toInt()
+                    else ((w * 60000L + denomInProgress / 2) / denomInProgress).toInt()
                 }
                 else -> null
             }
