@@ -32,7 +32,7 @@ import com.ttsaistory.app.ui.fonts.editorLineHeightSp
 private val LastSpeechBookmarkBorderColor = Color(0xFF4527A0)
 
 /**
- * Khung hàng chung cho ô câu (nền, viền bo, highlight TTS).
+ * Khung hàng chung cho ô câu (nền ô sửa, viền bookmark tím, viền câu đang phát = [primary]).
  * Chế độ chỉ xem và chế độ sửa dùng cùng khung; nội dung bên trong do [content] cung cấp.
  */
 @Composable
@@ -43,6 +43,9 @@ internal fun ReaderParagraphSplitSentenceCellRowFrame(
     content: @Composable RowScope.() -> Unit,
 ) {
     val bookmarkShape = RoundedCornerShape(6.dp)
+    val editCellShape = RoundedCornerShape(8.dp)
+    val outerShape = if (textEditorChromeViewOnly) bookmarkShape else editCellShape
+    val speakingBorderColor = MaterialTheme.colorScheme.primary
     Row(
         modifier =
             Modifier
@@ -50,6 +53,13 @@ internal fun ReaderParagraphSplitSentenceCellRowFrame(
                 .then(
                     if (lastSpeechBookmarkBorder && textEditorChromeViewOnly) {
                         Modifier.border(2.dp, LastSpeechBookmarkBorderColor, bookmarkShape)
+                    } else {
+                        Modifier
+                    },
+                )
+                .then(
+                    if (highlightCurrentSpeakingParagraph) {
+                        Modifier.border(2.dp, speakingBorderColor, outerShape)
                     } else {
                         Modifier
                     },
@@ -64,21 +74,9 @@ internal fun ReaderParagraphSplitSentenceCellRowFrame(
                                     MaterialTheme.colorScheme.surfaceVariant.copy(
                                         alpha = 0.45f,
                                     ),
-                                shape = RoundedCornerShape(8.dp),
+                                shape = editCellShape,
                             )
                     },
-                )
-                .background(
-                    color =
-                        if (highlightCurrentSpeakingParagraph) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            Color.Transparent
-                        },
-                    shape =
-                        RoundedCornerShape(
-                            if (textEditorChromeViewOnly) 6.dp else 8.dp,
-                        ),
                 ),
         verticalAlignment = Alignment.Top,
         content = content,

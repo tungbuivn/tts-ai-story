@@ -515,6 +515,7 @@ fun ReaderTab(
             dbLastSpeechSentenceIndex0,
             paragraphGroupFieldValues,
         )
+    val latestSpeakingParagraphIndex by rememberUpdatedState(speakingParagraphIndex)
     val editorAppearance = rememberReaderTabEditorAppearance(prefs, prefsBridge.fontPrefsEpoch)
     LaunchedEffect(activeLibraryStoryId, librarySyncEpoch, bookmarkResetKey) {
         val sid = activeLibraryStoryId
@@ -526,7 +527,16 @@ fun ReaderTab(
             withContext(Dispatchers.IO) {
                 libraryRepository.getStory(sid)?.lastSpeechSentenceIndex
             } ?: -1
-        dbLastSpeechSentenceIndex0 = idx
+        // Không ghi đè ô đang theo TTS: DB tải async có thể xong sau khi đã phát — tránh focus nhảy về bookmark cũ.
+        if (latestSpeakingParagraphIndex < 0) {
+            dbLastSpeechSentenceIndex0 = idx
+        }
+    }
+    LaunchedEffect(speakingParagraphIndex, activeLibraryStoryId) {
+        if (speakingParagraphIndex < 0) return@LaunchedEffect
+        val sid = activeLibraryStoryId ?: return@LaunchedEffect
+        if (sid <= 0L) return@LaunchedEffect
+        dbLastSpeechSentenceIndex0 = speakingParagraphIndex
     }
 
     val latestParagraphSplit by rememberUpdatedState(paragraphSplitMode)
@@ -902,7 +912,6 @@ fun ReaderTab(
         onDispose { onRegisterLibraryTabTextSerializer?.invoke(null) }
     }
     val latestFlatItemCount by rememberUpdatedState(flatItemCount)
-    val latestSpeakingParagraphIndex by rememberUpdatedState(speakingParagraphIndex)
     val latestSystemTtsPlaybackActive by rememberUpdatedState(systemTtsPlaybackActive)
     val latestElevenLabsJobActive by rememberUpdatedState(elevenLabsJobActive)
     val latestOnPlayParagraphs by rememberUpdatedState(onPlayParagraphs)
