@@ -538,7 +538,6 @@ fun ReaderTab(
         if (sid <= 0L) return@LaunchedEffect
         dbLastSpeechSentenceIndex0 = speakingParagraphIndex
     }
-
     val latestParagraphSplit by rememberUpdatedState(paragraphSplitMode)
     val latestParagraphFieldGroups by rememberUpdatedState(paragraphGroupFieldValues)
     val latestOnTextChange by rememberUpdatedState(onTextChange)
@@ -1083,9 +1082,23 @@ fun ReaderTab(
                 val fi = readerSplitFlatFocusIndex.coerceIn(0, flatItemCount - 1)
                 val (m, s) = flatIndexToMainSub(paragraphGroupFieldValues, fi)
                 val tf = paragraphGroupFieldValues.getOrNull(m)?.getOrNull(s)
-                "${fi}|${tf?.text?.length ?: 0}"
+                "${fi}|${tf?.text ?: ""}"
             } else {
                 ""
+            }
+        val localeCase = Locale.getDefault()
+        val paragraphSplitCaseNextIsUpper =
+            if (
+                paragraphSplitMode &&
+                !textEditorChromeViewOnly &&
+                flatItemCount > 0
+            ) {
+                val fi = readerSplitFlatFocusIndex.coerceIn(0, flatItemCount - 1)
+                val (m, s) = flatIndexToMainSub(paragraphGroupFieldValues, fi)
+                val t = paragraphGroupFieldValues.getOrNull(m)?.getOrNull(s)?.text.orEmpty()
+                paragraphSplitCaseToggleOffersUppercase(t, localeCase)
+            } else {
+                true
             }
         val bottomNavPublishKey =
             listOf(
@@ -1102,6 +1115,7 @@ fun ReaderTab(
                 activeStoryHasWebUrl,
                 webStoryQueueTargetStoryId?.toString() ?: "null",
                 readerKeyboardForceHidden,
+                paragraphSplitCaseNextIsUpper,
             ).joinToString("|")
         if (bottomNavPublishKey == lastBottomNavPublishKey) {
             return@SideEffect
@@ -1128,9 +1142,11 @@ fun ReaderTab(
                     } else {
                         false
                     },
+                paragraphSplitEditCaseNextIsUpper = paragraphSplitCaseNextIsUpper,
                 onParagraphSplitEditJoinUp = { paragraphSplitEditSink.joinUp() },
                 onParagraphSplitEditSplitAtCaret = { paragraphSplitEditSink.splitAtCaret() },
                 onParagraphSplitEditDelete = { paragraphSplitEditSink.deleteCell() },
+                onParagraphSplitEditCaseToggle = { paragraphSplitEditSink.toggleSentenceCase() },
                 readerKeyboardForceHidden = readerKeyboardForceHidden,
                 onReaderKeyboardForceHiddenToggle = {
                     readerKeyboardForceHidden = !readerKeyboardForceHidden
@@ -2241,6 +2257,28 @@ fun ReaderTab(
                 paragraphFocusRequestToken++
                 scheduleDebouncedParagraphParentPersist()
             }
+            fun applyCaseToFocusedParagraphSplitCell() {
+                keyboardController?.hide()
+                if (flatItemCount <= 0) return
+                val flat = readerSplitFlatFocusIndex.coerceIn(0, flatItemCount - 1)
+                val gl = paragraphGroupFieldValues.map { it.toMutableList() }.toMutableList()
+                if (gl.isEmpty()) return
+                val (m, s) = flatIndexToMainSub(gl, flat)
+                if (m !in gl.indices || s !in gl[m].indices) return
+                val cur = gl[m][s]
+                val locale = Locale.getDefault()
+                val offersUpper = paragraphSplitCaseToggleOffersUppercase(cur.text, locale)
+                val newText =
+                    if (offersUpper) {
+                        cur.text.uppercase(locale)
+                    } else {
+                        normalizeParagraphSplitCellSentenceCase(cur.text, locale)
+                    }
+                gl[m][s] = TextFieldValue(newText, TextRange(newText.length))
+                paragraphGroupFieldValues = compactParagraphGroupFieldValues(gl)
+                paragraphFocusRequestToken++
+                scheduleDebouncedParagraphParentPersist()
+            }
             SideEffect {
                 paragraphSplitEditSink.joinUp = {
                     keyboardController?.hide()
@@ -2269,6 +2307,9 @@ fun ReaderTab(
                 paragraphSplitEditSink.deleteCell = {
                     keyboardController?.hide()
                     clearParagraphCellText(readerSplitFlatFocusIndex)
+                }
+                paragraphSplitEditSink.toggleSentenceCase = {
+                    applyCaseToFocusedParagraphSplitCell()
                 }
             }
             val paragraphPageStartFlat = paragraphSplitPageIndex * paragraphSplitPageSize

@@ -32,6 +32,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -39,6 +40,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.ttsaistory.app.AnrDiagLog
 import com.ttsaistory.app.domain.ParagraphTextService
@@ -270,6 +273,25 @@ fun MainBottomBar(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceEvenly,
                         ) {
+                            IconButton(
+                                onClick = { nav.onParagraphSplitEditCaseToggle() },
+                                modifier =
+                                    Modifier.semantics {
+                                        contentDescription =
+                                            if (nav.paragraphSplitEditCaseNextIsUpper) {
+                                                "IN HOA toàn bộ câu đang chọn"
+                                            } else {
+                                                "Chuẩn hoá: chữ thường, viết hoa đầu mỗi dòng"
+                                            }
+                                    },
+                            ) {
+                                Text(
+                                    text = if (nav.paragraphSplitEditCaseNextIsUpper) "AA" else "Aa",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
                             IconButton(
                                 onClick = { nav.onParagraphSplitEditJoinUp() },
                                 enabled = nav.paragraphSplitEditJoinUpEnabled,

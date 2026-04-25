@@ -5,6 +5,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import com.ttsaistory.app.domain.sanitizeParagraphText
 import com.ttsaistory.app.model.AppEditorConstants
+import java.util.Locale
 
 /**
  * Gán trong [ReaderTab] khi `paragraphSplitMode` để bottom bar gọi nối / tách / xóa
@@ -14,7 +15,39 @@ class ReaderParagraphSplitEditActionSink {
     var joinUp: () -> Unit = {}
     var splitAtCaret: () -> Unit = {}
     var deleteCell: () -> Unit = {}
+    var toggleSentenceCase: () -> Unit = {}
 }
+
+/**
+ * Mỗi dòng (theo `\n`): chữ thường, viết hoa ký tự chữ cái đầu tiên của dòng (nếu có).
+ */
+/**
+ * `true` = ô chưa toàn chữ HOA theo [String.uppercase] → nút hiện **AA** (bấm để in hoa);
+ * `false` = đã bằng bản in hoa → nút hiện **Aa** (bấm để chuẩn hoá đầu dòng).
+ * Chuỗi rỗng: coi như chưa “toàn HOA có nghĩa” → ưu tiên **AA**.
+ */
+fun paragraphSplitCaseToggleOffersUppercase(
+    text: String,
+    locale: Locale = Locale.getDefault(),
+): Boolean {
+    if (text.isEmpty()) return true
+    return text != text.uppercase(locale)
+}
+
+fun normalizeParagraphSplitCellSentenceCase(
+    text: String,
+    locale: Locale = Locale.getDefault(),
+): String =
+    text.split("\n").joinToString("\n") { line ->
+        if (line.isEmpty()) {
+            line
+        } else {
+            val lower = line.lowercase(locale)
+            lower.replaceFirstChar { ch ->
+                if (ch.isLowerCase()) ch.titlecase(locale) else ch.toString()
+            }
+        }
+    }
 
 /** Bỏ ô con blank; bỏ hàng không còn ô; luôn ít nhất một hàng một ô (có thể rỗng để gõ). */
 fun compactParagraphGroupFieldValues(
@@ -73,15 +106,21 @@ data class ReaderBottomNavBridge(
     /** Chế độ theo câu chỉ xem: thanh chọn ô (0..max) trên bottom bar. */
     val showParagraphFocusSlider: Boolean,
     /**
-     * Chế độ sửa theo câu: hàng nút cố định (nối lên / tách tại con trỏ / xóa ô) thay cho slider,
+     * Chế độ sửa theo câu: hàng nút cố định (Aa/AA / nối lên / tách tại con trỏ / xóa ô) thay cho slider,
      * tránh co dãn vùng soạn thảo khi kéo slider.
      */
     val showParagraphSplitEditBar: Boolean = false,
     val paragraphSplitEditJoinUpEnabled: Boolean = false,
     val paragraphSplitEditDeleteEnabled: Boolean = false,
+    /**
+     * Suy ra từ nội dung ô đang focus: `true` = chưa toàn HOA → hiện **AA**;
+     * `false` = đã `text == text.uppercase()` → hiện **Aa**.
+     */
+    val paragraphSplitEditCaseNextIsUpper: Boolean = true,
     val onParagraphSplitEditJoinUp: () -> Unit = {},
     val onParagraphSplitEditSplitAtCaret: () -> Unit = {},
     val onParagraphSplitEditDelete: () -> Unit = {},
+    val onParagraphSplitEditCaseToggle: () -> Unit = {},
     /** Luôn ẩn IME khi đang tab Text; bật/tắt qua bottom bar, lưu prefs. */
     val readerKeyboardForceHidden: Boolean = false,
     val onReaderKeyboardForceHiddenToggle: () -> Unit = {},
