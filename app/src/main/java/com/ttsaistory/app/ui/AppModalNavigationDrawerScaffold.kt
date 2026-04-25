@@ -59,7 +59,9 @@ import com.ttsaistory.app.ui.reader.ExportM4aTopBarState
 import com.ttsaistory.app.ui.reader.MainBottomBar
 import com.ttsaistory.app.ui.reader.DialogReaderImeHideDelays
 import com.ttsaistory.app.ui.reader.ReaderTab
+import com.ttsaistory.app.ui.reader.ReaderService
 import com.ttsaistory.app.ui.reader.ReaderBottomNavBridge
+import com.ttsaistory.app.ui.reader.ReaderTabRegistrationCallbacks
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -78,6 +80,7 @@ fun AppModalNavigationDrawerScaffold(
     onOpenEditorFontConfigFromDrawer: () -> Unit,
     textTabSpeechEngine: TextTabSpeechEngine,
     prefs: SharedPreferences,
+    readerService: ReaderService,
     text: String,
     speakingParagraphIndex: Int,
     readerBottomNavBridge: ReaderBottomNavBridge?,
@@ -312,10 +315,12 @@ fun AppModalNavigationDrawerScaffold(
                     },
                     onLibraryImportFolderClick = onLibraryImportFolderRequested,
                     exportM4aTopBar = exportM4aTopBar,
+                    readerService = readerService,
                 )
             },
             bottomBar = {
                 MainBottomBar(
+                    readerService = readerService,
                     tabIndex = tabIndex,
                     text = text,
                     speakingParagraphIndex = speakingParagraphIndex,
@@ -388,6 +393,7 @@ fun AppModalNavigationDrawerScaffold(
                             ReaderTab(
                                 modifier = Modifier.fillMaxSize(),
                                 prefs = prefs,
+                                readerService = readerService,
                                 text = text,
                                 onTextChange = onEditorTextChange,
                                 tts = tts,
@@ -413,11 +419,16 @@ fun AppModalNavigationDrawerScaffold(
                                 onLibraryDataChanged = onLibraryDataChanged,
                                 onSavedLibraryStory = onSavedLibraryStoryFromEditor,
                                 onOpenLibraryStory = onOpenStoryFromLibrary,
-                                onRegisterParagraphDraftFlush = onRegisterParagraphDraftFlush,
-                                onRegisterLibraryTabTextSerializer =
-                                    onRegisterLibraryTabTextSerializer,
-                                onRegisterExportM4aForTopBar = onRegisterExportM4aForTopBar,
-                                onRegisterReaderBottomNav = onRegisterReaderBottomNav,
+                                registrationCallbacks =
+                                    ReaderTabRegistrationCallbacks(
+                                        onRegisterExportM4aForTopBar =
+                                            onRegisterExportM4aForTopBar,
+                                        onRegisterParagraphDraftFlush =
+                                            onRegisterParagraphDraftFlush,
+                                        onRegisterLibraryTabTextSerializer =
+                                            onRegisterLibraryTabTextSerializer,
+                                        onRegisterReaderBottomNav = onRegisterReaderBottomNav,
+                                    ),
                                 systemTtsSpeechRate = systemTtsSpeechRate,
                                 systemTtsPitch = systemTtsPitch,
                             )

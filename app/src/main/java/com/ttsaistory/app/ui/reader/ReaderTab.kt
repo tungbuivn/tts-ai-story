@@ -84,7 +84,6 @@ import com.ttsaistory.app.domain.flatIndexToMainSub
 import com.ttsaistory.app.domain.hasSpeakableParagraphFrom
 import com.ttsaistory.app.domain.mergeParagraphGridToStoredText
 import com.ttsaistory.app.domain.mergeParagraphs
-import com.ttsaistory.app.domain.ParagraphTextService
 import com.ttsaistory.app.domain.TtsExportPartsSnapshot
 import com.ttsaistory.app.domain.paragraphIndexAtTextOffset
 import com.ttsaistory.app.domain.paragraphMainGroupsForEditor
@@ -115,53 +114,29 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Nối từng ô lưới câu bằng `\n` — đưa vào [ParagraphTextService.setChapterText] (parse/sanitize nội bộ). */
+/** Nối từng ô lưới câu bằng `\n` — đưa vào [ReaderService.setChapterText] (parse/sanitize nội bộ). */
 private fun joinedSplitCellLinesForChapterService(
     fieldGroups: List<List<TextFieldValue>>,
 ): String = fieldGroups.flatMap { row -> row.map { it.text } }.joinToString("\n")
-
-private suspend fun clampLastSpeechSentenceIndexToParsedParagraphs(
-    libraryRepository: StoryLibraryRepository,
-    storyId: Long,
-    onIndexIfUpdated: (Int) -> Unit,
-) {
-    val snap = ParagraphTextService.snapshotChapterParagraphsForExport()
-    val updatedDb =
-        withContext(Dispatchers.IO) {
-            val cur = libraryRepository.getStory(storyId)?.lastSpeechSentenceIndex ?: -1
-            when {
-                snap.isEmpty() && cur >= 0 -> {
-                    libraryRepository.updateLastSpeechSentenceIndex(storyId, -1)
-                    -1
-                }
-                snap.isNotEmpty() && cur > snap.lastIndex -> {
-                    libraryRepository.updateLastSpeechSentenceIndex(storyId, snap.lastIndex)
-                    snap.lastIndex
-                }
-                else -> null
-            }
-        }
-    if (updatedDb != null) {
-        onIndexIfUpdated(updatedDb)
-    }
-}
 
 /**
  * Ô phẳng lưới split: ưu tiên [speakingParagraphIndex]; khi không phát dùng
  * [dbLastSpeechSentenceIndex0] từ DB (`last_speech_sentence_index`) khi có chương thư viện; không có → 0.
  */
 private fun readerSplitFlatFocusFromSpeechAndDb(
-    paragraphSplitMode: Boolean,
+    splitMode: Boolean,
     flatItemCount: Int,
     speakingParagraphIndex: Int,
+    manualFocusFlatIndex: Int,
     activeLibraryStoryId: Long?,
     dbLastSpeechSentenceIndex0: Int,
     fieldGroups: List<List<TextFieldValue>>,
 ): Int {
-    if (!paragraphSplitMode || flatItemCount <= 0) return 0
+    if (!splitMode || flatItemCount <= 0) return 0
     val resumeTts0 =
         when {
             speakingParagraphIndex >= 0 -> speakingParagraphIndex
+            manualFocusFlatIndex >= 0 -> manualFocusFlatIndex
             activeLibraryStoryId != null &&
                 activeLibraryStoryId > 0L &&
                 dbLastSpeechSentenceIndex0 >= 0 -> dbLastSpeechSentenceIndex0
@@ -178,6 +153,7 @@ private fun readerSplitFlatFocusFromSpeechAndDb(
 fun ReaderTab(
     modifier: Modifier = Modifier,
     prefs: SharedPreferences,
+    readerService: ReaderService,
     text: String,
     onTextChange: (String) -> Unit,
     tts: TextToSpeech?,
@@ -200,19 +176,13 @@ fun ReaderTab(
     onSavedLibraryStory: (Long) -> Unit,
     /** Mở một truyện thư viện khác (đồng bộ tab Text / thư viện). */
     onOpenLibraryStory: suspend (Long) -> Boolean,
-    /** Đăng ký nút xuất AAC trên top bar; [null] khi ReaderTab huỷ (đổi tab / dispose). */
-    onRegisterExportM4aForTopBar: ((ExportM4aTopBarState?) -> Unit)? = null,
-    /** Đăng ký hàm flush bản nháp lưới câu lên [text] trước khi app nhận share / đổi truyện thư viện. */
-    onRegisterParagraphDraftFlush: ((() -> Unit) -> Unit)? = null,
-    /** Đăng ký hàm trả về chuỗi chuẩn hoá để ghi file thư viện khi đổi chương; `null` khi huỷ. */
-    onRegisterLibraryTabTextSerializer: (((() -> String)?) -> Unit)? = null,
-    /** Đăng ký hành động bottom bar (cuộn đầu/cuối / con trỏ đầu cuối); null khi huỷ đăng ký. */
-    onRegisterReaderBottomNav: ((ReaderBottomNavBridge?) -> Unit)? = null,
+    /**
+     * Đăng ký: xuất AAC, flush nháp, serializer thư viện, bottom bar — gom một object để tránh lệch slot Compose.
+     */
+    registrationCallbacks: ReaderTabRegistrationCallbacks = ReaderTabRegistrationCallbacks(),
     systemTtsSpeechRate: Float,
     systemTtsPitch: Float,
 ) {
-    var paragraphSplitMode by rememberSaveable { mutableStateOf(true) }
-    var paragraphFocusRequestToken by remember { mutableIntStateOf(0) }
     /** Sau «ghép vào truyện trước» khi đích là truyện đang mở: khôi phục ô đang focus sau khi parent sync lưới. */
     var postMergeParagraphFocusFlatToRestore by remember { mutableStateOf<Int?>(null) }
     var fullTextFieldValue by remember { mutableStateOf(TextFieldValue(text)) }
@@ -229,9 +199,8 @@ fun ReaderTab(
     /** `last_speech_sentence_index` của chương thư viện đang mở (đọc từ DB). */
     var dbLastSpeechSentenceIndex0 by remember { mutableIntStateOf(-1) }
     val paragraphSplitPageSize = AppEditorConstants.PARAGRAPH_SPLIT_PAGE_SIZE
-    var paragraphSplitPageIndex by rememberSaveable { mutableIntStateOf(0) }
-    /** Đồng bộ với [ParagraphTextService.totalItemCount] (cập nhật trong [splitIntoParagraphs] / parse). */
-    val paragraphToolbarTtsTotal by ParagraphTextService.totalItemCount.collectAsState(initial = null)
+    /** Đồng bộ với [ReaderService.totalItemCount] (cập nhật trong [splitIntoParagraphs] / parse). */
+    val paragraphToolbarTtsTotal by readerService.totalItemCount.collectAsState(initial = null)
     var toolbarTtsSplitWorking by remember { mutableStateOf(false) }
     var prevParagraphSplitMode by remember { mutableStateOf<Boolean?>(null) }
     /** [librarySyncEpoch] đã được phản ánh lên [paragraphGroupFieldValues] (mở chương / đồng bộ file). */
@@ -240,15 +209,10 @@ fun ReaderTab(
     val ctx = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    var readerKeyboardForceHidden by remember {
-        mutableStateOf(
-            prefs.getBoolean(AppPreferenceKeys.KEY_READER_FORCE_HIDE_SOFT_KEYBOARD, false),
-        )
-    }
-    DisposableEffect(readerKeyboardForceHidden) {
+    DisposableEffect(readerService.readerKeyboardForceHidden) {
         val act = ctx as? Activity
         val window = act?.window
-        if (window != null && readerKeyboardForceHidden) {
+        if (window != null && readerService.readerKeyboardForceHidden) {
             window.setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
                     WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,
@@ -259,7 +223,7 @@ fun ReaderTab(
         }
     }
     fun hideSoftInputWhenReaderForceHidden() {
-        if (!readerKeyboardForceHidden) return
+        if (!readerService.readerKeyboardForceHidden) return
         keyboardController?.hide()
         val act = ctx as? Activity ?: return
         val imm =
@@ -508,9 +472,10 @@ fun ReaderTab(
     val prefsBridge = rememberReaderTabPrefsBridge(prefs)
     val readerSplitFlatFocusIndex =
         readerSplitFlatFocusFromSpeechAndDb(
-            paragraphSplitMode,
+            readerService.paragraphSplitMode,
             flatItemCount,
             speakingParagraphIndex,
+            readerService.paragraphManualFocusFlatIndex,
             activeLibraryStoryId,
             dbLastSpeechSentenceIndex0,
             paragraphGroupFieldValues,
@@ -518,6 +483,7 @@ fun ReaderTab(
     val latestSpeakingParagraphIndex by rememberUpdatedState(speakingParagraphIndex)
     val editorAppearance = rememberReaderTabEditorAppearance(prefs, prefsBridge.fontPrefsEpoch)
     LaunchedEffect(activeLibraryStoryId, librarySyncEpoch, bookmarkResetKey) {
+        readerService.paragraphManualFocusFlatIndex = -1
         val sid = activeLibraryStoryId
         if (sid == null || sid <= 0L) {
             dbLastSpeechSentenceIndex0 = -1
@@ -536,15 +502,24 @@ fun ReaderTab(
         if (speakingParagraphIndex < 0) return@LaunchedEffect
         val sid = activeLibraryStoryId ?: return@LaunchedEffect
         if (sid <= 0L) return@LaunchedEffect
-        dbLastSpeechSentenceIndex0 = speakingParagraphIndex
+        val next = speakingParagraphIndex.coerceAtLeast(0)
+        val changed = dbLastSpeechSentenceIndex0 != next
+        dbLastSpeechSentenceIndex0 = next
+        readerService.paragraphManualFocusFlatIndex = -1
+        // Queue phát tuần tự: tới câu nào thì ghi bookmark tới câu đó.
+        if (changed) {
+            withContext(Dispatchers.IO) {
+                libraryRepository.updateLastSpeechSentenceIndex(sid, next)
+            }
+        }
     }
-    val latestParagraphSplit by rememberUpdatedState(paragraphSplitMode)
+    val latestParagraphSplit by rememberUpdatedState(readerService.paragraphSplitMode)
     val latestParagraphFieldGroups by rememberUpdatedState(paragraphGroupFieldValues)
     val latestOnTextChange by rememberUpdatedState(onTextChange)
     val latestParentText by rememberUpdatedState(text)
     val paragraphSplitEditSink = remember { ReaderParagraphSplitEditActionSink() }
-    LaunchedEffect(paragraphSplitMode, textEditorChromeViewOnly) {
-        if (!paragraphSplitMode) {
+    LaunchedEffect(readerService.paragraphSplitMode, textEditorChromeViewOnly) {
+        if (!readerService.paragraphSplitMode) {
             snapshotFlow { text }
                 .collectLatest { snap ->
                     if (snap.isEmpty()) {
@@ -582,7 +557,7 @@ fun ReaderTab(
                 val rows1 = groups.map { r -> r.map { it.text } }
                 val merged =
                     withContext(Dispatchers.Default) { mergeParagraphGridToStoredText(rows1) }
-                if (!paragraphSplitMode) return@collectLatest
+                if (!readerService.paragraphSplitMode) return@collectLatest
                 if (merged.isEmpty()) {
                     if (latestParentText.isEmpty()) {
                         withContext(Dispatchers.Default) { splitIntoParagraphs("") }
@@ -591,7 +566,7 @@ fun ReaderTab(
                     return@collectLatest
                 }
                 delay(AppEditorConstants.PLAY_TOOLBAR_SPLIT_DEBOUNCE_MS)
-                if (!paragraphSplitMode) return@collectLatest
+                if (!readerService.paragraphSplitMode) return@collectLatest
                 val rows2 = latestParagraphFieldGroups.map { r -> r.map { it.text } }
                 val merged2 =
                     withContext(Dispatchers.Default) { mergeParagraphGridToStoredText(rows2) }
@@ -633,7 +608,7 @@ fun ReaderTab(
     /** Chuỗi lưu thư viện từ trạng thái editor hiện tại (lưới câu hoặc toàn văn). */
     fun serializedLibraryBodyNow(): String {
         val raw =
-            if (paragraphSplitMode) mergedParagraphFields() else fullTextFieldValue.text
+            if (readerService.paragraphSplitMode) mergedParagraphFields() else fullTextFieldValue.text
         return canonicalTextFromRaw(raw)
     }
 
@@ -657,10 +632,147 @@ fun ReaderTab(
         if (merged != text) onTextChange(merged)
     }
 
+    /**
+     * Tách chương tại câu TTS [speakingParagraphIndex] (khi đang đọc), hoặc câu đầu tiên tại ô đang sửa.
+     * Phần từ mốc đó đến hết → chương mới cùng thể loại; chương hiện tại được cắt phần sau.
+     */
+    fun breakChapterFromCurrentTtsToNewStory() {
+        val sid = activeLibraryStoryId
+        if (sid == null || sid <= 0L) {
+            Toast.makeText(
+                ctx,
+                "Cần mở chương từ thư viện trước.",
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+        if (textEditorChromeViewOnly || !readerService.paragraphSplitMode) return
+        keyboardController?.hide()
+        onStopAllSpeechReading()
+        flushParagraphParentPersist()
+        val groups = paragraphGroupFieldValues.map { r -> r.map { it.text } }
+        val merged = mergeParagraphGridToStoredText(groups)
+        val paras =
+            try {
+                splitIntoParagraphs(merged)
+            } catch (e: Exception) {
+                Toast.makeText(
+                    ctx,
+                    "Không tách được câu: ${e.message ?: e.javaClass.simpleName}",
+                    Toast.LENGTH_LONG,
+                ).show()
+                return
+            }
+        if (paras.size < 2) {
+            Toast.makeText(
+                ctx,
+                "Cần ít nhất hai câu (theo TTS) để tách chương.",
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+        val k =
+            if (speakingParagraphIndex >= 0) {
+                speakingParagraphIndex
+            } else {
+                val maxFlat = (flatItemCount - 1).coerceAtLeast(0)
+                val fi = readerSplitFlatFocusIndex.coerceIn(0, maxFlat)
+                editorUiFlatToTtsParagraphStartIndex(groups, fi)
+            }
+        if (k <= 0) {
+            Toast.makeText(
+                ctx,
+                "Chọn câu từ thứ hai trở đi, hoặc đang đọc xa hơn câu đầu.",
+                Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+        if (k >= paras.size) {
+            Toast.makeText(
+                ctx,
+                "Không còn nội dung phía sau mốc tách.",
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+        scope.launch {
+            try {
+                val head = mergeParagraphs(paras.subList(0, k))
+                val tail = mergeParagraphs(paras.subList(k, paras.size))
+                val headCanon =
+                    withContext(Dispatchers.Default) { canonicalTextFromRaw(head) }
+                val tailCanon =
+                    withContext(Dispatchers.Default) { canonicalTextFromRaw(tail) }
+                val row =
+                    withContext(Dispatchers.IO) { libraryRepository.getStory(sid) }
+                if (row == null) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(
+                            ctx,
+                            "Không tìm thấy chương trong thư viện.",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    return@launch
+                }
+                val catId = row.categoryId
+                val newTitle =
+                    withContext(Dispatchers.IO) {
+                        libraryRepository.suggestUniqueStoryTitle(
+                            catId,
+                            "${row.title} (tiếp)",
+                        )
+                    }
+                val oldBm = dbLastSpeechSentenceIndex0
+                val clamped =
+                    if (oldBm < 0) {
+                        -1
+                    } else {
+                        oldBm.coerceAtMost(k - 1)
+                    }
+                val newId =
+                    withContext(Dispatchers.IO) {
+                        libraryRepository.updateStoryText(sid, headCanon)
+                        libraryRepository.updateLastSpeechSentenceIndex(sid, clamped)
+                        val insertedId = libraryRepository.insertStory(catId, newTitle, tailCanon)
+                        // Chèn chương mới ngay sau chương hiện tại: 1, 1_1, 2, 3...
+                        val ordered = libraryRepository.listStories(catId).map { it.id }.toMutableList()
+                        val newIdx = ordered.indexOf(insertedId)
+                        val curIdx = ordered.indexOf(sid)
+                        if (newIdx >= 0 && curIdx >= 0 && newIdx != curIdx + 1) {
+                            ordered.removeAt(newIdx)
+                            val target = (curIdx + 1).coerceIn(0, ordered.size)
+                            ordered.add(target, insertedId)
+                            libraryRepository.reorderStoriesDisplayOrder(catId, ordered)
+                        }
+                        insertedId
+                    }
+                withContext(Dispatchers.Main) {
+                    onTextChange(tailCanon)
+                    onSavedLibraryStory(newId)
+                    onLibraryDataChanged()
+                    Toast.makeText(
+                        ctx,
+                        "Đã tách chương: $newTitle",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        ctx,
+                        e.message ?: "Lỗi tách chương",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+    }
+
     fun enqueueTtsExport() {
         val run: () -> Unit = {
             scope.launch {
-                val exportParts = ParagraphTextService.snapshotChapterParagraphsForExport()
+                val exportParts = readerService.snapshotChapterParagraphsForExport()
                 if (exportParts.isEmpty()) {
                     Toast.makeText(
                         ctx,
@@ -725,7 +837,7 @@ fun ReaderTab(
     }
 
     fun switchToolbarToFullTextMode() {
-        if (paragraphSplitMode) {
+        if (readerService.paragraphSplitMode) {
             flushParagraphParentPersist()
             val mergedNow = mergedParagraphFields()
             val groups = paragraphGroupFieldValues
@@ -752,15 +864,15 @@ fun ReaderTab(
                 fullTextFieldValue = TextFieldValue(mergedNow, TextRange(gStart, gEnd))
             }
         }
-        paragraphSplitMode = false
+        readerService.paragraphSplitMode = false
     }
 
     fun switchToolbarToParagraphSplitMode() {
-        if (!paragraphSplitMode) {
+        if (!readerService.paragraphSplitMode) {
             onTextChange(canonicalTextFromRaw(text))
         }
-        paragraphSplitPageIndex = 0
-        paragraphSplitMode = true
+        readerService.paragraphSplitPageIndex = 0
+        readerService.paragraphSplitMode = true
     }
 
     LaunchedEffect(textEditorChromeViewOnly) {
@@ -769,10 +881,10 @@ fun ReaderTab(
         val enteredEdit = !textEditorChromeViewOnly && prevChrome
         wasTextEditorChromeViewOnly = textEditorChromeViewOnly
         if (enteredEdit) {
-            if (paragraphSplitMode) {
-                ParagraphTextService.setChapterText(text)
+            if (readerService.paragraphSplitMode) {
+                readerService.setChapterText(text)
                 val cells =
-                    ParagraphTextService.chapterParagraphs.value
+                    readerService.chapterParagraphs.value
                         .map(::sanitizeParagraphText)
                         .filter { it.isNotEmpty() }
                 val row = if (cells.isEmpty()) listOf("") else cells
@@ -786,18 +898,12 @@ fun ReaderTab(
             }
         }
         if (!enteredViewOnly) return@LaunchedEffect
-        if (!paragraphSplitMode) return@LaunchedEffect
+        if (!readerService.paragraphSplitMode) return@LaunchedEffect
         flushParagraphParentPersist()
-        if (!textEditorChromeViewOnly || !paragraphSplitMode) return@LaunchedEffect
+        if (!textEditorChromeViewOnly || !readerService.paragraphSplitMode) return@LaunchedEffect
         val joinedForChapter = joinedSplitCellLinesForChapterService(paragraphGroupFieldValues)
         withContext(Dispatchers.Default) {
-            ParagraphTextService.setChapterText(joinedForChapter)
-        }
-        val sidClamp = activeLibraryStoryId
-        if (sidClamp != null && sidClamp > 0L) {
-            clampLastSpeechSentenceIndexToParsedParagraphs(libraryRepository, sidClamp) {
-                dbLastSpeechSentenceIndex0 = it
-            }
+            readerService.setChapterText(joinedForChapter)
         }
         val cellCount = paragraphGroupFieldValues.sumOf { it.size }
         val t0 =
@@ -818,36 +924,27 @@ fun ReaderTab(
         AnrDiagLog.end("ReaderTab preserveSplitCells(leaveEditViewOnly) done", t0)
     }
 
-    /** Đang sửa ô: đổi chương / sync thư viện — cập nhật [ParagraphTextService] từ lưới (nối `\n`), không merge lưu kho. */
+    /** Đang sửa ô: đổi chương / sync thư viện — cập nhật [ReaderService] từ lưới (nối `\n`), không merge lưu kho. */
     LaunchedEffect(activeLibraryStoryId, librarySyncEpoch) {
-        if (!paragraphSplitMode || textEditorChromeViewOnly) return@LaunchedEffect
+        if (!readerService.paragraphSplitMode || textEditorChromeViewOnly) return@LaunchedEffect
         val sid = activeLibraryStoryId ?: return@LaunchedEffect
         if (sid <= 0L) return@LaunchedEffect
         if (paragraphGroupFieldValues.sumOf { it.size } == 0) return@LaunchedEffect
         val joined = joinedSplitCellLinesForChapterService(paragraphGroupFieldValues)
         withContext(Dispatchers.Default) {
-            ParagraphTextService.setChapterText(joined)
-        }
-        clampLastSpeechSentenceIndexToParsedParagraphs(libraryRepository, sid) {
-            dbLastSpeechSentenceIndex0 = it
+            readerService.setChapterText(joined)
         }
     }
 
-    /** Đồng bộ prefs bookmark TTS khi ô UI (flat) đổi — chỉ dùng ánh xạ ô→TTS, không merge/split cả văn bản (tránh ANR). */
+    /** Chỉ cập nhật focus ô thủ công, không ghi DB bookmark `last_speech_sentence_index`. */
     fun persistLastReadingBookmarkFromEditorFlat(
         groups: List<List<String>>,
         editorUiFlat: Int,
     ) {
-        if (!paragraphSplitMode || groups.isEmpty()) return
-        val sid = activeLibraryStoryId ?: return
-        if (sid <= 0L) return
+        if (!readerService.paragraphSplitMode || groups.isEmpty()) return
         val maxUi = (groups.sumOf { it.size } - 1).coerceAtLeast(0)
         val v = editorUiFlat.coerceIn(0, maxUi)
-        val tts = editorUiFlatToTtsParagraphStartIndex(groups, v).coerceAtLeast(0)
-        dbLastSpeechSentenceIndex0 = tts
-        scope.launch(Dispatchers.IO) {
-            libraryRepository.updateLastSpeechSentenceIndex(sid, tts)
-        }
+        readerService.paragraphManualFocusFlatIndex = v
     }
 
     /** Như [persistLastReadingBookmarkFromEditorFlat] nhưng không tạo bản sao List<List<String>> toàn lưới (chạm ô). */
@@ -855,13 +952,19 @@ fun ReaderTab(
         fieldGroups: List<List<TextFieldValue>>,
         editorUiFlat: Int,
     ) {
-        if (!paragraphSplitMode || fieldGroups.isEmpty()) return
-        val sid = activeLibraryStoryId ?: return
-        if (sid <= 0L) return
+        if (!readerService.paragraphSplitMode || fieldGroups.isEmpty()) return
         val maxUi = (fieldGroups.sumOf { it.size } - 1).coerceAtLeast(0)
         val v = editorUiFlat.coerceIn(0, maxUi)
-        val tts = editorFlatToTtsBookmarkIndex(fieldGroups, v).coerceAtLeast(0)
+        readerService.paragraphManualFocusFlatIndex = v
+    }
+
+    /** Chỉ ghi `last_speech_sentence_index` khi user bấm Play. */
+    fun persistLastSpeakingIndexForPlay(ttsParagraphIndex: Int) {
+        val sid = activeLibraryStoryId ?: return
+        if (sid <= 0L) return
+        val tts = ttsParagraphIndex.coerceAtLeast(0)
         dbLastSpeechSentenceIndex0 = tts
+        readerService.paragraphManualFocusFlatIndex = -1
         scope.launch(Dispatchers.IO) {
             libraryRepository.updateLastSpeechSentenceIndex(sid, tts)
         }
@@ -872,23 +975,24 @@ fun ReaderTab(
      * ô highlight theo [readerSplitFlatFocusIndex] (đọc + câu đang phát).
      */
     fun onUserSelectedParagraphSplitCell(flatIdx: Int) {
-        if (!paragraphSplitMode) return
+        if (!readerService.paragraphSplitMode) return
         val gl = latestParagraphFieldGroups
         val maxUi = (gl.sumOf { it.size } - 1).coerceAtLeast(0)
         if (maxUi < 0) return
         val v = flatIdx.coerceIn(0, maxUi)
+        readerService.paragraphLocalSelectedFlatIndex = v
         if (v == readerSplitFlatFocusIndex) {
-            paragraphFocusRequestToken++
+            readerService.paragraphFocusRequestToken++
         }
         persistLastReadingBookmarkFromEditorFieldFlat(gl, v)
     }
 
     SideEffect {
-        onRegisterParagraphDraftFlush?.invoke { flushParagraphParentPersist() }
+        registrationCallbacks.onRegisterParagraphDraftFlush?.invoke { flushParagraphParentPersist() }
     }
 
     SideEffect {
-        onRegisterExportM4aForTopBar?.invoke(
+        registrationCallbacks.onRegisterExportM4aForTopBar?.invoke(
             ExportM4aTopBarState(
                 onClick = { enqueueTtsExport() },
                 enabled =
@@ -899,16 +1003,16 @@ fun ReaderTab(
         )
     }
 
-    DisposableEffect(onRegisterExportM4aForTopBar) {
+    DisposableEffect(registrationCallbacks.onRegisterExportM4aForTopBar) {
         onDispose {
-            onRegisterExportM4aForTopBar?.invoke(null)
+            registrationCallbacks.onRegisterExportM4aForTopBar?.invoke(null)
         }
     }
 
     val latestFullTextField by rememberUpdatedState(fullTextFieldValue)
-    DisposableEffect(onRegisterLibraryTabTextSerializer) {
-        onRegisterLibraryTabTextSerializer?.invoke { serializedLibraryBodyNow() }
-        onDispose { onRegisterLibraryTabTextSerializer?.invoke(null) }
+    DisposableEffect(registrationCallbacks.onRegisterLibraryTabTextSerializer) {
+        registrationCallbacks.onRegisterLibraryTabTextSerializer?.invoke { serializedLibraryBodyNow() }
+        onDispose { registrationCallbacks.onRegisterLibraryTabTextSerializer?.invoke(null) }
     }
     val latestFlatItemCount by rememberUpdatedState(flatItemCount)
     val latestSystemTtsPlaybackActive by rememberUpdatedState(systemTtsPlaybackActive)
@@ -924,7 +1028,7 @@ fun ReaderTab(
         if (n <= 0) return
         val maxPage = (n + paragraphSplitPageSize - 1) / paragraphSplitPageSize - 1
         val page = (globalFlat / paragraphSplitPageSize).coerceIn(0, maxPage)
-        paragraphSplitPageIndex = page
+        readerService.paragraphSplitPageIndex = page
         val ps = page * paragraphSplitPageSize
         val pageItemCount = (n - ps).coerceAtMost(paragraphSplitPageSize).coerceAtLeast(1)
         val local = (globalFlat - ps).coerceIn(0, pageItemCount - 1)
@@ -944,7 +1048,7 @@ fun ReaderTab(
         if (n <= 0) return
         val maxPage = (n + paragraphSplitPageSize - 1) / paragraphSplitPageSize - 1
         val page = (globalFlat / paragraphSplitPageSize).coerceIn(0, maxPage)
-        paragraphSplitPageIndex = page
+        readerService.paragraphSplitPageIndex = page
         val ps = page * paragraphSplitPageSize
         val pageItemCount = (n - ps).coerceAtMost(paragraphSplitPageSize).coerceAtLeast(1)
         val local = (globalFlat - ps).coerceIn(0, pageItemCount - 1)
@@ -959,19 +1063,19 @@ fun ReaderTab(
         }
     }
 
-    LaunchedEffect(paragraphSplitMode, flatItemCount, paragraphSplitPageSize) {
-        if (!paragraphSplitMode || flatItemCount <= 0) {
-            paragraphSplitPageIndex = 0
+    LaunchedEffect(readerService.paragraphSplitMode, flatItemCount, paragraphSplitPageSize) {
+        if (!readerService.paragraphSplitMode || flatItemCount <= 0) {
+            readerService.paragraphSplitPageIndex = 0
             return@LaunchedEffect
         }
         val maxPage = (flatItemCount + paragraphSplitPageSize - 1) / paragraphSplitPageSize - 1
-        if (paragraphSplitPageIndex > maxPage) {
-            paragraphSplitPageIndex = maxPage
+        if (readerService.paragraphSplitPageIndex > maxPage) {
+            readerService.paragraphSplitPageIndex = maxPage
         }
     }
 
-    LaunchedEffect(paragraphSplitMode, textEditorChromeViewOnly) {
-        if (!paragraphSplitMode) {
+    LaunchedEffect(readerService.paragraphSplitMode, textEditorChromeViewOnly) {
+        if (!readerService.paragraphSplitMode) {
             flatCellTtsStart = intArrayOf()
             return@LaunchedEffect
         }
@@ -988,10 +1092,10 @@ fun ReaderTab(
     }
 
     fun goTopOrCaretStartAction() {
-        if (paragraphSplitMode) {
-            paragraphSplitPageIndex = 0
+        if (readerService.paragraphSplitMode) {
+            readerService.paragraphSplitPageIndex = 0
             persistLastReadingBookmarkFromEditorFieldFlat(paragraphGroupFieldValues, 0)
-            paragraphFocusRequestToken++
+            readerService.paragraphFocusRequestToken++
             scope.launch {
                 delay(1)
                 listState.scrollToItem(0)
@@ -1016,14 +1120,14 @@ fun ReaderTab(
     }
 
     fun goBottomOrCaretEndAction() {
-        if (paragraphSplitMode) {
+        if (readerService.paragraphSplitMode) {
             val n = latestFlatItemCount
             if (n > 0) {
                 val maxPage = (n + paragraphSplitPageSize - 1) / paragraphSplitPageSize - 1
-                paragraphSplitPageIndex = maxPage.coerceAtLeast(0)
+                readerService.paragraphSplitPageIndex = maxPage.coerceAtLeast(0)
                 persistLastReadingBookmarkFromEditorFieldFlat(paragraphGroupFieldValues, n - 1)
-                paragraphFocusRequestToken++
-                val pageStart = paragraphSplitPageIndex * paragraphSplitPageSize
+                readerService.paragraphFocusRequestToken++
+                val pageStart = readerService.paragraphSplitPageIndex * paragraphSplitPageSize
                 val localLast = (n - 1 - pageStart).coerceAtLeast(0)
                 scope.launch {
                     delay(1)
@@ -1075,7 +1179,7 @@ fun ReaderTab(
             paragraphGroupFieldValues.joinToString(",") { it.size.toString() }
         val splitEditFocusFingerprint =
             if (
-                paragraphSplitMode &&
+                readerService.paragraphSplitMode &&
                 !textEditorChromeViewOnly &&
                 flatItemCount > 0
             ) {
@@ -1089,7 +1193,7 @@ fun ReaderTab(
         val localeCase = Locale.getDefault()
         val paragraphSplitCaseNextIsUpper =
             if (
-                paragraphSplitMode &&
+                readerService.paragraphSplitMode &&
                 !textEditorChromeViewOnly &&
                 flatItemCount > 0
             ) {
@@ -1100,9 +1204,16 @@ fun ReaderTab(
             } else {
                 true
             }
+        val breakPageEnabled =
+            readerService.paragraphSplitMode &&
+                !textEditorChromeViewOnly &&
+                flatItemCount > 0 &&
+                activeLibraryStoryId != null &&
+                (activeLibraryStoryId ?: 0L) > 0L &&
+                (paragraphToolbarTtsTotal?.let { it >= 2 } != false)
         val bottomNavPublishKey =
             listOf(
-                paragraphSplitMode,
+                readerService.paragraphSplitMode,
                 textEditorChromeViewOnly,
                 flatItemCount,
                 readerSplitFlatFocusIndex,
@@ -1114,60 +1225,73 @@ fun ReaderTab(
                 webPrefetchChapterQueueLines.size,
                 activeStoryHasWebUrl,
                 webStoryQueueTargetStoryId?.toString() ?: "null",
-                readerKeyboardForceHidden,
+                readerService.readerKeyboardForceHidden,
                 paragraphSplitCaseNextIsUpper,
+                breakPageEnabled,
+                activeLibraryStoryId?.toString() ?: "n",
             ).joinToString("|")
         if (bottomNavPublishKey == lastBottomNavPublishKey) {
             return@SideEffect
         }
         lastBottomNavPublishKey = bottomNavPublishKey
-        onRegisterReaderBottomNav?.invoke(
+        registrationCallbacks.onRegisterReaderBottomNav?.invoke(
             ReaderBottomNavBridge(
-                paragraphSplitMode = paragraphSplitMode,
+                paragraphSplitMode = readerService.paragraphSplitMode,
                 showPasteAndCaretStep = !textEditorChromeViewOnly,
                 showParagraphFocusSlider =
-                    paragraphSplitMode && textEditorChromeViewOnly && flatItemCount > 0,
+                    readerService.paragraphSplitMode && textEditorChromeViewOnly && flatItemCount > 0,
                 showParagraphSplitEditBar =
-                    paragraphSplitMode && !textEditorChromeViewOnly && flatItemCount > 0,
+                    readerService.paragraphSplitMode && !textEditorChromeViewOnly && flatItemCount > 0,
                 paragraphSplitEditJoinUpEnabled =
-                    paragraphSplitMode &&
+                    readerService.paragraphSplitMode &&
                         !textEditorChromeViewOnly &&
                         flatItemCount > 0 &&
                         readerSplitFlatFocusIndex > 0,
                 paragraphSplitEditDeleteEnabled =
-                    if (paragraphSplitMode && !textEditorChromeViewOnly && flatItemCount > 0) {
+                    if (readerService.paragraphSplitMode && !textEditorChromeViewOnly && flatItemCount > 0) {
                         val fi = readerSplitFlatFocusIndex.coerceIn(0, flatItemCount - 1)
                         val (m, s) = flatIndexToMainSub(paragraphGroupFieldValues, fi)
                         paragraphGroupFieldValues.getOrNull(m)?.getOrNull(s)?.text?.isNotEmpty() == true
                     } else {
                         false
                     },
+                paragraphSplitEditBreakPageEnabled = breakPageEnabled,
+                onParagraphSplitEditBreakPage = { breakChapterFromCurrentTtsToNewStory() },
                 paragraphSplitEditCaseNextIsUpper = paragraphSplitCaseNextIsUpper,
                 onParagraphSplitEditJoinUp = { paragraphSplitEditSink.joinUp() },
                 onParagraphSplitEditSplitAtCaret = { paragraphSplitEditSink.splitAtCaret() },
                 onParagraphSplitEditDelete = { paragraphSplitEditSink.deleteCell() },
                 onParagraphSplitEditCaseToggle = { paragraphSplitEditSink.toggleSentenceCase() },
-                readerKeyboardForceHidden = readerKeyboardForceHidden,
+                readerKeyboardForceHidden = readerService.readerKeyboardForceHidden,
                 onReaderKeyboardForceHiddenToggle = {
-                    readerKeyboardForceHidden = !readerKeyboardForceHidden
+                    readerService.readerKeyboardForceHidden = !readerService.readerKeyboardForceHidden
                     prefs
                         .edit()
                         .putBoolean(
                             AppPreferenceKeys.KEY_READER_FORCE_HIDE_SOFT_KEYBOARD,
-                            readerKeyboardForceHidden,
+                            readerService.readerKeyboardForceHidden,
                         )
                         .apply()
-                    if (readerKeyboardForceHidden) {
+                    if (readerService.readerKeyboardForceHidden) {
                         focusManager.clearFocus(force = true)
                     }
                     hideSoftInputWhenReaderForceHidden()
                 },
                 paragraphFocusSliderMax = (flatItemCount - 1).coerceAtLeast(0),
                 paragraphFocusSliderValue =
-                    readerSplitFlatFocusIndex.coerceIn(0, (flatItemCount - 1).coerceAtLeast(0)),
+                    (
+                        if (
+                            readerService.paragraphLocalSelectedFlatIndex in
+                            0..(flatItemCount - 1).coerceAtLeast(0)
+                        ) {
+                            readerService.paragraphLocalSelectedFlatIndex
+                        } else {
+                            readerSplitFlatFocusIndex
+                        }
+                    ).coerceIn(0, (flatItemCount - 1).coerceAtLeast(0)),
                 onParagraphFocusSliderChange = { newUiFlat ->
                     onUserSelectedParagraphSplitCell(newUiFlat)
-                    paragraphFocusRequestToken++
+                    readerService.paragraphFocusRequestToken++
                 },
                 onParagraphFocusSliderFocusCommitted = {
                     val gl = latestParagraphFieldGroups
@@ -1177,7 +1301,7 @@ fun ReaderTab(
                         latestSpeakingParagraphIndex >= 0 ||
                             latestSystemTtsPlaybackActive ||
                             latestElevenLabsJobActive
-                    if (paragraphSplitMode && wasPlaying) {
+                    if (readerService.paragraphSplitMode && wasPlaying) {
                         val groups = gl.map { r -> r.map { it.text } }
                         val merged = mergeParagraphGridToStoredText(groups)
                         val paras = splitIntoParagraphs(merged)
@@ -1187,13 +1311,14 @@ fun ReaderTab(
                                 (paras.size - 1).coerceAtLeast(0),
                             )
                         if (hasSpeakableParagraphFrom(paras, startTts)) {
+                            persistLastSpeakingIndexForPlay(startTts)
                             latestOnPlayParagraphs(paras, startTts)
                         }
                     }
                     scrollParagraphLazyToGlobalFlat(idx)
                 },
                 readerProgressCurrentOneBased =
-                    if (paragraphSplitMode && flatItemCount > 0) {
+                    if (readerService.paragraphSplitMode && flatItemCount > 0) {
                         val groups =
                             paragraphGroupFieldValues.map { row -> row.map { it.text } }
                         val ui =
@@ -1223,7 +1348,7 @@ fun ReaderTab(
                             val pasted = clip.getItemAt(0).coerceToText(ctx).toString()
                             if (pasted.isEmpty()) {
                                 Toast.makeText(ctx, "Clipboard trống", Toast.LENGTH_SHORT).show()
-                            } else if (paragraphSplitMode) {
+                            } else if (readerService.paragraphSplitMode) {
                             val gl =
                                 paragraphGroupFieldValues
                                     .map { it.toMutableList() }
@@ -1286,7 +1411,7 @@ fun ReaderTab(
                     }
                 },
                 moveCaretLeft = {
-                    if (paragraphSplitMode) {
+                    if (readerService.paragraphSplitMode) {
                         val gl =
                             paragraphGroupFieldValues
                                 .map { it.toMutableList() }
@@ -1324,7 +1449,7 @@ fun ReaderTab(
                     }
                 },
                 moveCaretRight = {
-                    if (paragraphSplitMode) {
+                    if (readerService.paragraphSplitMode) {
                         val gl =
                             paragraphGroupFieldValues
                                 .map { it.toMutableList() }
@@ -1378,7 +1503,7 @@ fun ReaderTab(
     }
     // Không key theo onRegisterReaderBottomNav: lambda từ AppTabs đổi mỗi recompose → onDispose gọi
     // invoke(null) làm mất bridge (slider / +/- không cập nhật).
-    val latestRegisterBottomNav by rememberUpdatedState(onRegisterReaderBottomNav)
+    val latestRegisterBottomNav by rememberUpdatedState(registrationCallbacks.onRegisterReaderBottomNav)
     DisposableEffect(Unit) {
         onDispose {
             lastBottomNavPublishKey = null
@@ -1402,8 +1527,8 @@ fun ReaderTab(
         }
     }
 
-    LaunchedEffect(text, paragraphSplitMode) {
-        if (paragraphSplitMode) return@LaunchedEffect
+    LaunchedEffect(text, readerService.paragraphSplitMode) {
+        if (readerService.paragraphSplitMode) return@LaunchedEffect
         if (fullTextFieldValue.text == text) return@LaunchedEffect
         val et = fullTextNativeEditRef.get()
         if (et != null && text.length >= AppEditorConstants.FULL_TEXT_NATIVE_EDITOR_MIN_CHARS) {
@@ -1424,15 +1549,15 @@ fun ReaderTab(
         fullTextFieldValue = TextFieldValue(text, TextRange(start, a))
     }
 
-    LaunchedEffect(text, paragraphSplitMode, textEditorChromeViewOnly) {
+    LaunchedEffect(text, readerService.paragraphSplitMode, textEditorChromeViewOnly) {
         // Trong lưới câu + chế độ sửa ô, [text] vẫn nhảy theo debounce parent — không cần
         // paragraphsForEditor toàn văn (ReaderTab chỉ dùng segments khi không split / bookmark).
-        if (paragraphSplitMode && !textEditorChromeViewOnly) return@LaunchedEffect
+        if (readerService.paragraphSplitMode && !textEditorChromeViewOnly) return@LaunchedEffect
         val snapshot = text
         val t0 = AnrDiagLog.begin("ReaderTab paragraphsForEditor len=${snapshot.length}")
         val computed =
             withContext(Dispatchers.Default) {
-                ParagraphTextService.setChapterText(snapshot)
+                readerService.setChapterText(snapshot)
                 paragraphsForEditor(snapshot)
             }
         if (snapshot == text) {
@@ -1446,7 +1571,7 @@ fun ReaderTab(
     LaunchedEffect(librarySyncEpoch) {
         if (librarySyncEpoch <= 0) return@LaunchedEffect
         toolbarTtsSplitWorking = false
-        if (!paragraphSplitMode) {
+        if (!readerService.paragraphSplitMode) {
             postMergeParagraphFocusFlatToRestore = null
             return@LaunchedEffect
         }
@@ -1460,10 +1585,10 @@ fun ReaderTab(
             )
         val segs =
             withContext(Dispatchers.Default) {
-                ParagraphTextService.setChapterText(snapshot)
-                paragraphMainGroupsForEditor()
+                readerService.setChapterText(snapshot)
+                paragraphMainGroupsForEditor(readerService.chapterParagraphs.value)
             }
-        if (snapshot != text || !paragraphSplitMode) {
+        if (snapshot != text || !readerService.paragraphSplitMode) {
             AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor libSync CANCELLED", t0)
             toolbarTtsSplitWorking = false
             postMergeParagraphFocusFlatToRestore = null
@@ -1505,9 +1630,9 @@ fun ReaderTab(
             newCellCount > 0 &&
             postMergeParagraphFocusFlatToRestore == null
         ) {
-            paragraphSplitPageIndex = 0
+            readerService.paragraphSplitPageIndex = 0
             persistLastReadingBookmarkFromEditorFieldFlat(paragraphGroupFieldValues, 0)
-            paragraphFocusRequestToken++
+            readerService.paragraphFocusRequestToken++
             scope.launch {
                 delay(1)
                 try {
@@ -1522,19 +1647,19 @@ fun ReaderTab(
         if (mergeRestoreFlat != null) {
             postMergeParagraphFocusFlatToRestore = null
             delay(120)
-            if (snapshot != text || !paragraphSplitMode) return@LaunchedEffect
+            if (snapshot != text || !readerService.paragraphSplitMode) return@LaunchedEffect
             val maxFlat = (newCellCount - 1).coerceAtLeast(0)
             if (maxFlat >= 0) {
                 val ui = mergeRestoreFlat.coerceIn(0, maxFlat)
                 persistLastReadingBookmarkFromEditorFieldFlat(paragraphGroupFieldValues, ui)
-                paragraphFocusRequestToken++
+                readerService.paragraphFocusRequestToken++
                 scrollParagraphLazyToGlobalFlat(ui, flatCountForPaging = newCellCount)
             }
         }
     }
 
-    LaunchedEffect(paragraphSplitMode, text, librarySyncEpoch) {
-        if (!paragraphSplitMode) {
+    LaunchedEffect(readerService.paragraphSplitMode, text, librarySyncEpoch) {
+        if (!readerService.paragraphSplitMode) {
             prevParagraphSplitMode = false
             return@LaunchedEffect
         }
@@ -1556,10 +1681,10 @@ fun ReaderTab(
             )
         val segs =
             withContext(Dispatchers.Default) {
-                ParagraphTextService.setChapterText(snapshot)
-                paragraphMainGroupsForEditor()
+                readerService.setChapterText(snapshot)
+                paragraphMainGroupsForEditor(readerService.chapterParagraphs.value)
             }
-        if (snapshot != text || !paragraphSplitMode) {
+        if (snapshot != text || !readerService.paragraphSplitMode) {
             AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor(splitMode+text) CANCELLED", tParse)
             return@LaunchedEffect
         }
@@ -1603,7 +1728,7 @@ fun ReaderTab(
         val merged =
             withContext(Dispatchers.Default) { mergeParagraphGridToStoredText(fieldRows) }
         AnrDiagLog.end("ReaderTab mergeParagraphGridToStoredText(Default) mergedLen=${merged.length}", tMerge)
-        if (snapshot != text || !paragraphSplitMode) return@LaunchedEffect
+        if (snapshot != text || !readerService.paragraphSplitMode) return@LaunchedEffect
         if (merged != text) {
             paragraphGroupFieldValues =
                 segs.map { row ->
@@ -1633,12 +1758,12 @@ fun ReaderTab(
     }
 
     /**
-     * Chế độ lưới + chỉ xem: lưới bám [ParagraphTextService.chapterParagraphs] (debounce, bỏ qua nếu trùng ô)
+     * Chế độ lưới + chỉ xem: lưới bám [ReaderService.chapterParagraphs] (debounce, bỏ qua nếu trùng ô)
      * để headless sync / parse nền không cần đổi [text] vẫn cập nhật UI.
      */
-    LaunchedEffect(paragraphSplitMode, textEditorChromeViewOnly) {
-        if (!paragraphSplitMode || !textEditorChromeViewOnly) return@LaunchedEffect
-        ParagraphTextService.chapterParagraphs
+    LaunchedEffect(readerService.paragraphSplitMode, textEditorChromeViewOnly) {
+        if (!readerService.paragraphSplitMode || !textEditorChromeViewOnly) return@LaunchedEffect
+        readerService.chapterParagraphs
             .debounce(48L)
             .collectLatest { flat ->
                 val cells =
@@ -1673,14 +1798,14 @@ fun ReaderTab(
     }
 
     /** Lưới câu + vừa tắt chỉ xem: cập nhật tổng câu bottom bar (không chạy khi đang gõ vì [textEditorChromeViewOnly] không đổi). */
-    LaunchedEffect(textEditorChromeViewOnly, paragraphSplitMode) {
-        if (textEditorChromeViewOnly || !paragraphSplitMode) return@LaunchedEffect
+    LaunchedEffect(textEditorChromeViewOnly, readerService.paragraphSplitMode) {
+        if (textEditorChromeViewOnly || !readerService.paragraphSplitMode) return@LaunchedEffect
         yield()
         toolbarTtsSplitWorking = true
         try {
             val rows = paragraphGroupFieldValues.map { r -> r.map { it.text } }
             val mergedR = withContext(Dispatchers.Default) { mergeParagraphGridToStoredText(rows) }
-            if (textEditorChromeViewOnly || !paragraphSplitMode) return@LaunchedEffect
+            if (textEditorChromeViewOnly || !readerService.paragraphSplitMode) return@LaunchedEffect
             if (mergedR.isEmpty()) {
                 if (latestParentText.isEmpty()) {
                     withContext(Dispatchers.Default) { splitIntoParagraphs("") }
@@ -1695,23 +1820,23 @@ fun ReaderTab(
 
     // Cuộn lưới split tới ô ánh xạ từ câu TTS đang phát hoặc `last_speech_sentence_index` trong DB.
     LaunchedEffect(
-        paragraphSplitMode,
+        readerService.paragraphSplitMode,
         librarySyncEpoch,
         readerSplitFlatFocusIndex,
-        paragraphFocusRequestToken,
+        readerService.paragraphFocusRequestToken,
         flatItemCount,
         bookmarkResetKey,
         segments.size,
         activeLibraryStoryId,
     ) {
-        if (!paragraphSplitMode || flatItemCount <= 0) return@LaunchedEffect
+        if (!readerService.paragraphSplitMode || flatItemCount <= 0) return@LaunchedEffect
         if (textEditorChromeViewOnly && segments.isEmpty()) return@LaunchedEffect
         delay(32)
         animateParagraphLazyToGlobalFlat(readerSplitFlatFocusIndex)
     }
 
-    LaunchedEffect(paragraphSplitMode, textEditorChromeViewOnly) {
-        if (paragraphSplitMode || textEditorChromeViewOnly) return@LaunchedEffect
+    LaunchedEffect(readerService.paragraphSplitMode, textEditorChromeViewOnly) {
+        if (readerService.paragraphSplitMode || textEditorChromeViewOnly) return@LaunchedEffect
         delay(16)
         fullTextFocusRequester.requestFocus()
     }
@@ -1760,10 +1885,10 @@ fun ReaderTab(
                 },
                 onPlayParagraphsClick = {
                     keyboardController?.hide()
-                    if (paragraphSplitMode) flushParagraphParentPersist()
+                    if (readerService.paragraphSplitMode) flushParagraphParentPersist()
                     val src =
                         fullTextBlockBodyForToolbar(
-                            paragraphSplitMode,
+                            readerService.paragraphSplitMode,
                             mergedParagraphFields(),
                             text,
                         )
@@ -1776,6 +1901,7 @@ fun ReaderTab(
                         } else {
                             0
                         }
+                    persistLastSpeakingIndexForPlay(resumeIdx)
                     onPlayParagraphs(paras, resumeIdx)
                 },
                 playParagraphsEnabled =
@@ -1796,7 +1922,7 @@ fun ReaderTab(
                 onReloadWebContentClick = {
                     keyboardController?.hide()
                     val sid = activeLibraryStoryId ?: return@ReaderToolbarActionsColumn
-                    if (paragraphSplitMode) flushParagraphParentPersist()
+                    if (readerService.paragraphSplitMode) flushParagraphParentPersist()
                     scope.launch {
                         webContentReloadWorking = true
                         try {
@@ -1939,7 +2065,7 @@ fun ReaderTab(
                     }
                 },
                 newLibraryStoryEnabled = exportUiFromCoordinator == null,
-                paragraphSplitMode = paragraphSplitMode,
+                paragraphSplitMode = readerService.paragraphSplitMode,
                 onSwitchToFullTextMode = ::switchToolbarToFullTextMode,
                 onSwitchToParagraphSplitMode = ::switchToolbarToParagraphSplitMode,
             )
@@ -2075,15 +2201,16 @@ fun ReaderTab(
                 },
             )
         }
-        if (paragraphSplitMode) {
+        if (readerService.paragraphSplitMode) {
             fun clampFlatFocus() {
                 val cellTotal = paragraphGroupFieldValues.sumOf { it.size }
                 val maxFlat = (cellTotal - 1).coerceAtLeast(0)
                 val bf =
                     readerSplitFlatFocusFromSpeechAndDb(
-                        paragraphSplitMode,
+                        readerService.paragraphSplitMode,
                         cellTotal,
                         speakingParagraphIndex,
+                        readerService.paragraphManualFocusFlatIndex,
                         activeLibraryStoryId,
                         dbLastSpeechSentenceIndex0,
                         paragraphGroupFieldValues,
@@ -2092,12 +2219,12 @@ fun ReaderTab(
                     persistLastReadingBookmarkFromEditorFieldFlat(paragraphGroupFieldValues, maxFlat)
                 }
                 if (cellTotal <= 0) {
-                    paragraphSplitPageIndex = 0
+                    readerService.paragraphSplitPageIndex = 0
                 } else {
                     val maxPage =
                         (cellTotal + paragraphSplitPageSize - 1) / paragraphSplitPageSize - 1
-                    if (paragraphSplitPageIndex > maxPage) {
-                        paragraphSplitPageIndex = maxPage
+                    if (readerService.paragraphSplitPageIndex > maxPage) {
+                        readerService.paragraphSplitPageIndex = maxPage
                     }
                 }
             }
@@ -2139,9 +2266,10 @@ fun ReaderTab(
                 val preTotal = paragraphGroupFieldValues.sumOf { it.size }
                 val curFlat =
                     readerSplitFlatFocusFromSpeechAndDb(
-                        paragraphSplitMode,
+                        readerService.paragraphSplitMode,
                         preTotal,
                         speakingParagraphIndex,
+                        readerService.paragraphManualFocusFlatIndex,
                         activeLibraryStoryId,
                         dbLastSpeechSentenceIndex0,
                         paragraphGroupFieldValues,
@@ -2156,7 +2284,7 @@ fun ReaderTab(
                         else -> curFlat
                     }.coerceIn(0, maxNew)
                 persistLastReadingBookmarkFromEditorFieldFlat(paragraphGroupFieldValues, newFlat)
-                paragraphFocusRequestToken++
+                readerService.paragraphFocusRequestToken++
                 clampFlatFocus()
                 scrollParagraphLazyToGlobalFlat(
                     newFlat,
@@ -2224,7 +2352,7 @@ fun ReaderTab(
                 val newMain = (m + 1).coerceAtMost(paragraphGroupFieldValues.lastIndex)
                 val newFlat = flatIndexFromMainSub(paragraphGroupFieldValues, newMain, 0)
                 persistLastReadingBookmarkFromEditorFieldFlat(paragraphGroupFieldValues, newFlat)
-                paragraphFocusRequestToken++
+                readerService.paragraphFocusRequestToken++
                 scheduleDebouncedParagraphParentPersist()
                 return true
             }
@@ -2254,7 +2382,7 @@ fun ReaderTab(
                 gl[m][s] = TextFieldValue("", TextRange(0))
                 paragraphGroupFieldValues = compactParagraphGroupFieldValues(gl)
                 clampFlatFocus()
-                paragraphFocusRequestToken++
+                readerService.paragraphFocusRequestToken++
                 scheduleDebouncedParagraphParentPersist()
             }
             fun applyCaseToFocusedParagraphSplitCell() {
@@ -2276,7 +2404,7 @@ fun ReaderTab(
                     }
                 gl[m][s] = TextFieldValue(newText, TextRange(newText.length))
                 paragraphGroupFieldValues = compactParagraphGroupFieldValues(gl)
-                paragraphFocusRequestToken++
+                readerService.paragraphFocusRequestToken++
                 scheduleDebouncedParagraphParentPersist()
             }
             SideEffect {
@@ -2312,7 +2440,7 @@ fun ReaderTab(
                     applyCaseToFocusedParagraphSplitCell()
                 }
             }
-            val paragraphPageStartFlat = paragraphSplitPageIndex * paragraphSplitPageSize
+            val paragraphPageStartFlat = readerService.paragraphSplitPageIndex * paragraphSplitPageSize
             val paragraphPageEndFlat =
                 (paragraphPageStartFlat + paragraphSplitPageSize).coerceAtMost(flatItemCount)
             val paragraphPageItemCount = (paragraphPageEndFlat - paragraphPageStartFlat).coerceAtLeast(0)
@@ -2331,18 +2459,19 @@ fun ReaderTab(
                 dbLastSpeechSentenceIndex0 = dbLastSpeechSentenceIndex0,
                 systemTtsPlaybackActive = systemTtsPlaybackActive,
                 elevenLabsJobActive = elevenLabsJobActive,
-                paragraphSplitMode = paragraphSplitMode,
+                paragraphSplitMode = readerService.paragraphSplitMode,
                 focusedParagraphIndex = readerSplitFlatFocusIndex,
+                localSelectedParagraphIndex = readerService.paragraphLocalSelectedFlatIndex,
                 flatItemCount = flatItemCount,
-                paragraphFocusRequestToken = paragraphFocusRequestToken,
-                readerKeyboardForceHidden = readerKeyboardForceHidden,
+                paragraphFocusRequestToken = readerService.paragraphFocusRequestToken,
+                readerKeyboardForceHidden = readerService.readerKeyboardForceHidden,
                 editorAppearance = editorAppearance,
                 onUserSelectedParagraphSplitCell = ::onUserSelectedParagraphSplitCell,
                 hideSoftInputWhenReaderForceHidden = ::hideSoftInputWhenReaderForceHidden,
                 onMergeParagraphBackwardFromCell = { mergeParagraphBackward(it) },
                 onParagraphCellValueChange = cell@{ mainIdx, subIdx, flatIdx, newVal, tryMerge ->
                     if (textEditorChromeViewOnly) return@cell
-                    if (readerKeyboardForceHidden) return@cell
+                    if (readerService.readerKeyboardForceHidden) return@cell
                     val old =
                         paragraphGroupFieldValues.getOrNull(mainIdx)?.getOrNull(subIdx)
                             ?: return@cell
@@ -2397,7 +2526,7 @@ fun ReaderTab(
         categoryId = libraryStoryPickerCategoryId,
         currentStoryId = activeLibraryStoryId,
         onStorySelected = { id ->
-            if (paragraphSplitMode) flushParagraphParentPersist()
+            if (readerService.paragraphSplitMode) flushParagraphParentPersist()
             libraryStoryPickerOpen = false
             libraryStoryPickerCategoryId = null
             scope.launch {
@@ -2450,10 +2579,10 @@ fun ReaderTab(
             scope.launch {
                 val cid = libraryStoryPickerCategoryId ?: return@launch
                 try {
-                    if (paragraphSplitMode) flushParagraphParentPersist()
+                    if (readerService.paragraphSplitMode) flushParagraphParentPersist()
                     val bodyToPersist = serializedLibraryBodyNow()
                     val sid = activeLibraryStoryId
-                    if (paragraphSplitMode && sid == targetId && flatItemCount > 0) {
+                    if (readerService.paragraphSplitMode && sid == targetId && flatItemCount > 0) {
                         postMergeParagraphFocusFlatToRestore =
                             readerSplitFlatFocusIndex.coerceIn(0, flatItemCount - 1)
                     }

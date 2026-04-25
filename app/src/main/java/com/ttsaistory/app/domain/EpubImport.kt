@@ -19,6 +19,36 @@ import kotlinx.coroutines.withContext
 
 /** Số chương EPUB xử lý đồng thời tối đa (đọc XHTML + chuyển text trong bộ nhớ). */
 private const val EPUB_CHAPTER_CONVERT_PARALLELISM = 10
+private const val EPUB_DEFERRED_ONLINE_URL_SCHEME = "epub-lazy"
+
+data class DeferredEpubChapterSpec(
+    val sourceEpubPath: String,
+    val chapterIndex1: Int,
+    val totalChapters: Int,
+)
+
+fun deferredEpubChapterOnlineUrl(
+    sourceEpubPath: String,
+    chapterIndex1: Int,
+    totalChapters: Int,
+): String {
+    val src = Uri.encode(sourceEpubPath.trim())
+    return "$EPUB_DEFERRED_ONLINE_URL_SCHEME://chapter/$chapterIndex1?total=$totalChapters&src=$src"
+}
+
+fun parseDeferredEpubChapterOnlineUrl(url: String?): DeferredEpubChapterSpec? {
+    val u = url?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val uri = runCatching { Uri.parse(u) }.getOrNull() ?: return null
+    if (!uri.scheme.equals(EPUB_DEFERRED_ONLINE_URL_SCHEME, ignoreCase = true)) return null
+    if (!uri.host.equals("chapter", ignoreCase = true)) return null
+    val segs = uri.pathSegments
+    if (segs.isEmpty()) return null
+    val idx = segs[0].toIntOrNull() ?: return null
+    val total = uri.getQueryParameter("total")?.toIntOrNull() ?: return null
+    val src = Uri.decode(uri.getQueryParameter("src") ?: return null).trim()
+    if (src.isEmpty() || idx <= 0 || total <= 0 || idx > total) return null
+    return DeferredEpubChapterSpec(src, idx, total)
+}
 
 fun uriLooksLikeEpubArchive(context: Context, uri: Uri, displayName: String?): Boolean {
     val name = displayName?.trim().orEmpty()
@@ -125,6 +155,57 @@ private fun resolveHrefAgainstOpf(opfPathInZip: String, hrefRaw: String): String
     return combined.normalize().toString().replace('\\', '/')
 }
 
+private fun epubChapterPathsInSpineOrder(zip: ZipFile): List<String> {
+    if (zip.getEntry("META-INF/encryption.xml") != null) {
+        error("EPUB có mã hoá — không hỗ trợ.")
+    }
+    val containerXml =
+        readZipEntryText(zip, "META-INF/container.xml")
+            ?: error("Thiếu META-INF/container.xml")
+    val opfRel =
+        readContainerOpfPath(containerXml)?.trim()?.replace('\\', '/')
+            ?: error("Không đọc được đường dẫn package.opf")
+    val opfXml =
+        readZipEntryText(zip, opfRel)
+            ?: error("Không đọc được $opfRel")
+    val manifest = parseManifestItems(opfXml)
+    var idrefs = parseSpineIdrefs(opfXml)
+    if (idrefs.isEmpty()) {
+        idrefs =
+            manifest.entries
+                .filter { (_, item) ->
+                    shouldReadSpineItemAsHtmlChapter(item.mediaType, item.href)
+                }
+                .map { it.key }
+    }
+    val paths = ArrayList<String>(idrefs.size)
+    for (idref in idrefs) {
+        val item = manifest[idref] ?: continue
+        if (!shouldReadSpineItemAsHtmlChapter(item.mediaType, item.href)) continue
+        paths.add(resolveHrefAgainstOpf(opfRel, item.href))
+    }
+    if (paths.isEmpty()) {
+        error("Không đọc được chương HTML/XHTML nào từ EPUB.")
+    }
+    return paths
+}
+
+suspend fun readEpubChapterCount(epubFile: File): Int =
+    withContext(Dispatchers.IO) {
+        ZipFile(epubFile).use { zip -> epubChapterPathsInSpineOrder(zip).size }
+    }
+
+suspend fun readEpubChapterPlainText(epubFile: File, chapterIndex1: Int): String =
+    withContext(Dispatchers.IO) {
+        ZipFile(epubFile).use { zip ->
+            val paths = epubChapterPathsInSpineOrder(zip)
+            if (chapterIndex1 !in 1..paths.size) return@withContext ""
+            val rawHtml = readZipEntryText(zip, paths[chapterIndex1 - 1]).orEmpty()
+            if (rawHtml.isBlank()) return@withContext ""
+            htmlOrXhtmlToPlainText(rawHtml).trim()
+        }
+    }
+
 /**
  * Đọc EPUB từ [epubUri], chuyển mỗi mục spine (X)HTML thành text, ghi
  * `00000001.txt`, `00000002.txt`, … vào [destDir] (đã được dọn trước).
@@ -158,38 +239,7 @@ suspend fun importEpubChaptersAsNumberedTxtFiles(
     try {
         val chapterPathsInSpineOrder =
             ZipFile(tmp).use { zip ->
-                if (zip.getEntry("META-INF/encryption.xml") != null) {
-                    error("EPUB có mã hoá — không hỗ trợ.")
-                }
-                val containerXml =
-                    readZipEntryText(zip, "META-INF/container.xml")
-                        ?: error("Thiếu META-INF/container.xml")
-                val opfRel =
-                    readContainerOpfPath(containerXml)?.trim()?.replace('\\', '/')
-                        ?: error("Không đọc được đường dẫn package.opf")
-                val opfXml =
-                    readZipEntryText(zip, opfRel)
-                        ?: error("Không đọc được $opfRel")
-                val manifest = parseManifestItems(opfXml)
-                var idrefs = parseSpineIdrefs(opfXml)
-                if (idrefs.isEmpty()) {
-                    idrefs =
-                        manifest.entries
-                            .filter { (_, item) ->
-                                shouldReadSpineItemAsHtmlChapter(item.mediaType, item.href)
-                            }
-                            .map { it.key }
-                }
-                val paths = ArrayList<String>(idrefs.size)
-                for (idref in idrefs) {
-                    val item = manifest[idref] ?: continue
-                    if (!shouldReadSpineItemAsHtmlChapter(item.mediaType, item.href)) continue
-                    paths.add(resolveHrefAgainstOpf(opfRel, item.href))
-                }
-                if (paths.isEmpty()) {
-                    error("Không đọc được chương HTML/XHTML nào từ EPUB.")
-                }
-                paths
+                epubChapterPathsInSpineOrder(zip)
             }
         val n = chapterPathsInSpineOrder.size
         val parallelism = EPUB_CHAPTER_CONVERT_PARALLELISM.coerceAtLeast(1)

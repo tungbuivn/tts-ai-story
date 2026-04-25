@@ -120,6 +120,12 @@ data class ReaderBottomNavBridge(
     val onParagraphSplitEditJoinUp: () -> Unit = {},
     val onParagraphSplitEditSplitAtCaret: () -> Unit = {},
     val onParagraphSplitEditDelete: () -> Unit = {},
+    /**
+     * Tách chương: từ câu TTS hiện tại (đang phát, hoặc câu đầu ở ô đang sửa) đến hết → chương mới;
+     * chương đang mở chỉ còn phần trước mốc đó.
+     */
+    val paragraphSplitEditBreakPageEnabled: Boolean = false,
+    val onParagraphSplitEditBreakPage: () -> Unit = {},
     val onParagraphSplitEditCaseToggle: () -> Unit = {},
     /** Luôn ẩn IME khi đang tab Text; bật/tắt qua bottom bar, lưu prefs. */
     val readerKeyboardForceHidden: Boolean = false,
@@ -161,4 +167,16 @@ data class ReaderBottomNavBridge(
      * null khi không còn mục trong queue.
      */
     val webStoryQueueTargetStoryId: Long? = null,
+)
+
+/**
+ * Gom 4 hàm đăng ký từ [ReaderTab] lên [AppModalNavigationDrawerScaffold] thành **một** tham số
+ * (tránh lệch slot / `ClassCastException` khi composable có quá nhiều tham số kiểu hàm với compiler Compose).
+ * [ExportM4aTopBarState] nằm cùng package ([ReaderTab] file).
+ */
+data class ReaderTabRegistrationCallbacks(
+    val onRegisterExportM4aForTopBar: ((ExportM4aTopBarState?) -> Unit)? = null,
+    val onRegisterParagraphDraftFlush: ((() -> Unit) -> Unit)? = null,
+    val onRegisterLibraryTabTextSerializer: (((() -> String)?) -> Unit)? = null,
+    val onRegisterReaderBottomNav: ((ReaderBottomNavBridge?) -> Unit)? = null,
 )

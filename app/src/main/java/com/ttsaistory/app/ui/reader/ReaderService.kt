@@ -1,0 +1,107 @@
+package com.ttsaistory.app.ui.reader
+
+import android.content.SharedPreferences
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.ttsaistory.app.data.StoryLibraryRepository
+import com.ttsaistory.app.domain.ParagraphTextService
+import com.ttsaistory.app.domain.sanitizeParagraphText
+import com.ttsaistory.app.model.AppPreferenceKeys
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * Trạng thái đọc/ghi sống **ngoài** [ReaderTab] (giữ trong [remember] ở [com.ttsaistory.app.ui.AppTabs])
+ * để không mất khi chuyển tab — [ReaderTab] bị gỡ khỏi composition khi sang Thư viện.
+ *
+ * Mở rộng dần các trường cần giữ; nội dung chương vẫn do `text` / thư viện ở parent.
+ */
+@Stable
+class ReaderService(prefs: SharedPreferences) {
+    /** Lưới câu (theo ô) hay toàn văn. */
+    var paragraphSplitMode: Boolean by mutableStateOf(true)
+
+    /** Trang lưới câu (chia trang). */
+    var paragraphSplitPageIndex: Int by mutableIntStateOf(0)
+
+    /** Token ép recompose / focus lưới. */
+    var paragraphFocusRequestToken: Int by mutableIntStateOf(0)
+
+    /**
+     * Focus ô do user chọn thủ công (slider/chạm ô), tách riêng khỏi bookmark DB
+     * để không vô tình ghi `last_speech_sentence_index`.
+     */
+    var paragraphManualFocusFlatIndex: Int by mutableIntStateOf(-1)
+
+    /** Ô câu user vừa chạm/chọn trong view theo đoạn (viền cam cục bộ). */
+    var paragraphLocalSelectedFlatIndex: Int by mutableIntStateOf(-1)
+
+    /** Ẩn bàn phím mềm khi đọc (ReaderTab vẫn ghi prefs khi đổi). */
+    var readerKeyboardForceHidden: Boolean by mutableStateOf(
+        prefs.getBoolean(AppPreferenceKeys.KEY_READER_FORCE_HIDE_SOFT_KEYBOARD, false),
+    )
+
+    /**
+     * State parse của tab Soạn/Sửa, giữ qua vòng đời compose của [ReaderTab]
+     * để quay lại tab không phải parse lại chỉ để khôi phục UI/progress.
+     */
+    private val _totalItemCount = MutableStateFlow<Int?>(null)
+    val totalItemCount: StateFlow<Int?> = _totalItemCount.asStateFlow()
+
+    private val _chapterText = MutableStateFlow("")
+    val chapterText: StateFlow<String> = _chapterText.asStateFlow()
+
+    private val _chapterParagraphs = MutableStateFlow<List<String>>(emptyList())
+    val chapterParagraphs: StateFlow<List<String>> = _chapterParagraphs.asStateFlow()
+
+    /** Tick làm mới WPM khi TTS hệ thống đang phát (giữ qua đổi chapter). */
+    var systemTtsWpmLiveTick: Int by mutableIntStateOf(0)
+    /** Nội dung đoạn đang phát (index gốc -> văn đã sanitize) để đếm WPM. */
+    var systemTtsWpmOrigToText: Map<Int, String> by mutableStateOf(emptyMap())
+    /** Tổng thời gian phát các utterance đoạn đã hoàn tất (ms). */
+    var systemTtsWpmSpeechMsAccum: Long by mutableLongStateOf(0L)
+    /** Tổng số từ các đoạn đã hoàn tất để tính WPM. */
+    var systemTtsWpmWordsAccum: Int by mutableIntStateOf(0)
+    /** Mốc thời gian bắt đầu từng đoạn tts_para_* (elapsedRealtime). */
+    val systemTtsWpmStartElapsedByParagraph = mutableStateMapOf<Int, Long>()
+
+    /** Có nguồn deferred (pdf/zip/epub lazy) và vẫn còn item chưa nạp hết. */
+    var deferredFetchHasRemaining: Boolean by mutableStateOf(false)
+    /** User bật/tắt continue fetch nền cho deferred source. */
+    var deferredFetchContinueEnabled: Boolean by mutableStateOf(false)
+    /** Worker continue fetch đang chạy nền. */
+    var deferredFetchWorking: Boolean by mutableStateOf(false)
+    /** Nhãn tiến trình deferred fetch để hiển thị ở bottom bar (vd. "PDF 12 / 300"). */
+    var deferredFetchProgressLabel: String by mutableStateOf("")
+
+    /**
+     * Parse [text] -> [chapterParagraphs]/[chapterText] và cập nhật [totalItemCount].
+     * Nếu có chapter thư viện thì chuẩn hóa lại file khi canonical khác raw.
+     */
+    fun setChapterText(
+        text: String,
+        chapterId: Long? = null,
+        libraryRepository: StoryLibraryRepository? = null,
+    ) {
+        val textNorm = text.replace("\r\n", "\n").replace('\r', '\n')
+        val flat = ParagraphTextService.parseStoredTextToSentences(textNorm)
+        val canonical = flat.joinToString("\n")
+        _chapterParagraphs.value = flat
+        _chapterText.value = canonical
+        _totalItemCount.value = flat.count { sanitizeParagraphText(it).isNotEmpty() }
+        val sid = chapterId
+        val repo = libraryRepository
+        if (sid != null && sid > 0L && repo != null && canonical != textNorm) {
+            repo.updateStoryTextIfExists(sid, canonical)
+        }
+    }
+
+    fun snapshotChapterParagraphsForExport(): List<String> =
+        _chapterParagraphs.value.map(::sanitizeParagraphText).filter { it.isNotEmpty() }
+}

@@ -6,8 +6,73 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
+import java.util.zip.ZipFile
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+private const val ZIP_DEFERRED_ONLINE_URL_SCHEME = "zip-lazy"
+
+data class DeferredZipEntrySpec(
+    val sourceZipPath: String,
+    val entryIndex1: Int,
+    val totalEntries: Int,
+)
+
+fun deferredZipEntryOnlineUrl(
+    sourceZipPath: String,
+    entryIndex1: Int,
+    totalEntries: Int,
+): String {
+    val src = Uri.encode(sourceZipPath.trim())
+    return "$ZIP_DEFERRED_ONLINE_URL_SCHEME://entry/$entryIndex1?total=$totalEntries&src=$src"
+}
+
+fun parseDeferredZipEntryOnlineUrl(url: String?): DeferredZipEntrySpec? {
+    val u = url?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val uri = runCatching { Uri.parse(u) }.getOrNull() ?: return null
+    if (!uri.scheme.equals(ZIP_DEFERRED_ONLINE_URL_SCHEME, ignoreCase = true)) return null
+    if (!uri.host.equals("entry", ignoreCase = true)) return null
+    val segs = uri.pathSegments
+    if (segs.isEmpty()) return null
+    val idx = segs[0].toIntOrNull() ?: return null
+    val total = uri.getQueryParameter("total")?.toIntOrNull() ?: return null
+    val src = Uri.decode(uri.getQueryParameter("src") ?: return null).trim()
+    if (src.isEmpty() || idx <= 0 || total <= 0 || idx > total) return null
+    return DeferredZipEntrySpec(src, idx, total)
+}
+
+private fun isLikelyTextEntryName(name: String): Boolean {
+    val n = name.lowercase(Locale.ROOT)
+    return n.endsWith(".txt") || n.endsWith(".text") || n.endsWith(".md") ||
+        n.endsWith(".log") || n.endsWith(".csv")
+}
+
+suspend fun listZipTextEntryNames(zipFile: File): List<String> =
+    withContext(Dispatchers.IO) {
+        ZipFile(zipFile).use { zip ->
+            zip.entries().asSequence()
+                .filter { !it.isDirectory }
+                .map { it.name.trim().replace('\\', '/') }
+                .filter { it.isNotEmpty() && isLikelyTextEntryName(it) }
+                .sorted()
+                .toList()
+        }
+    }
+
+suspend fun readZipTextEntryByIndex(zipFile: File, entryIndex1: Int): String =
+    withContext(Dispatchers.IO) {
+        val names = listZipTextEntryNames(zipFile)
+        if (entryIndex1 !in 1..names.size) return@withContext ""
+        val name = names[entryIndex1 - 1]
+        ZipFile(zipFile).use { zip ->
+            val entry = zip.getEntry(name) ?: return@withContext ""
+            zip.getInputStream(entry).use { ins ->
+                ins.readBytes().toString(Charsets.UTF_8).trimStart('\uFEFF').trim()
+            }
+        }
+    }
 
 fun uriLooksLikeZipArchive(context: Context, uri: Uri, displayName: String?): Boolean {
     val name = displayName?.trim().orEmpty()

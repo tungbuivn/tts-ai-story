@@ -5,19 +5,22 @@ import android.net.Uri
 import android.os.Handler
 import android.widget.Toast
 import com.ttsaistory.app.data.StoryLibraryRepository
-import com.ttsaistory.app.domain.extractZipContentToDirectory
-import com.ttsaistory.app.domain.importEpubChaptersAsNumberedTxtFiles
-import com.ttsaistory.app.domain.importPdfPagesAsNumberedTxtFiles
+import com.ttsaistory.app.domain.copyPdfUriToLocalFile
+import com.ttsaistory.app.domain.deferredEpubChapterOnlineUrl
+import com.ttsaistory.app.domain.deferredPdfPageOnlineUrl
+import com.ttsaistory.app.domain.deferredZipEntryOnlineUrl
+import com.ttsaistory.app.domain.listZipTextEntryNames
+import com.ttsaistory.app.domain.readEpubChapterCount
+import com.ttsaistory.app.domain.readEpubChapterPlainText
+import com.ttsaistory.app.domain.readPdfSinglePageText
+import com.ttsaistory.app.domain.readPdfTotalPages
+import com.ttsaistory.app.domain.readZipTextEntryByIndex
 import com.ttsaistory.app.domain.safeCategoryNameFromEpubDisplayName
 import com.ttsaistory.app.domain.safeCategoryNameFromPdfDisplayName
 import com.ttsaistory.app.domain.safeCategoryNameFromZipDisplayName
 import com.ttsaistory.app.ui.library.OpenFileProgressLogUi
 import java.io.File
-import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -48,83 +51,59 @@ internal suspend fun importOpenedZipArchiveFromSaf(
 ) {
     logBridge.postUpdate {
         it?.copy(
-            message = "Đang chuẩn bị và đọc ZIP…",
+            message = "Đang chuẩn bị và nhập ZIP (mục đầu)…",
             progressCompleted = false,
         )
     }
-    val importCategoryId =
+    val (zipCategoryName, zipPreloadedCount, importCategoryId) =
         withContext(Dispatchers.IO) {
-        val catName =
-            safeCategoryNameFromZipDisplayName(
-                resolvedDisplayName ?: "archive.zip",
-            )
-        val extractRoot = storyLibrary.prepareZipImportExtractDirectory(catName)
-        val categoryId = storyLibrary.getOrCreateCategoryByName(catName)
-        val extractRootCanon = extractRoot.canonicalFile
-        val usedTitles = mutableSetOf<String>()
-        val importedStoryCount = AtomicInteger(0)
-        val extractedFiles = mutableListOf<Pair<String, File>>()
-        coroutineScope {
-            val importQueue = Channel<Pair<String, File>>(Channel.UNLIMITED)
-            val importWorker =
-                launch {
-                    for ((label, file) in importQueue) {
-                        val added =
-                            storyLibrary.importSingleLocalFileAsStoryIfText(
-                                categoryId,
-                                extractRootCanon,
-                                file,
-                                usedTitles,
-                            )
-                        if (added) importedStoryCount.incrementAndGet()
-                        logBridge.postUpdate { current ->
-                            if (label.isEmpty()) {
-                                current
-                            } else {
-                                current?.copy(
-                                    message =
-                                        if (added) {
-                                            "Đã nhập: $label"
-                                        } else {
-                                            "Đã giải nén (bỏ qua / không phải văn): $label"
-                                        },
-                                )
-                            }
-                        }
-                    }
-                }
-            try {
-                extractZipContentToDirectory(
-                    activity,
-                    pickedUri,
-                    extractRoot,
-                    onFileExtracted = { _, entryName ->
-                        val label = entryName.trim()
-                        val file = File(extractRoot, entryName)
-                        extractedFiles.add(label to file)
-                    },
+            val catName =
+                safeCategoryNameFromZipDisplayName(
+                    resolvedDisplayName ?: "archive.zip",
                 )
-                extractedFiles.sortBy { it.first }
-                for (pair in extractedFiles) {
-                    check(importQueue.trySend(pair).isSuccess) {
-                        "Không đưa được file vào hàng đợi nhập"
-                    }
-                }
-            } finally {
-                importQueue.close()
+            val extractRoot = storyLibrary.prepareZipImportExtractDirectory(catName)
+            val categoryId = storyLibrary.getOrCreateCategoryByName(catName)
+            val sourceZip = File(extractRoot, "_source.zip")
+            logBridge.postUpdate { it?.copy(message = "Đang sao chép nguồn ZIP…") }
+            copyPdfUriToLocalFile(activity, pickedUri, sourceZip)
+            val names = listZipTextEntryNames(sourceZip)
+            if (names.isEmpty()) error("ZIP không có file văn bản phù hợp.")
+            val preloadCount = minOf(1, names.size)
+            for (i in 1..preloadCount) {
+                logBridge.postUpdate { it?.copy(message = "Đang đọc mục $i / $preloadCount…") }
+                val body = readZipTextEntryByIndex(sourceZip, i)
+                storyLibrary.insertStory(
+                    categoryId = categoryId,
+                    title = String.format("%08d", i),
+                    body = body,
+                )
             }
-            importWorker.join()
+            if (preloadCount < names.size) {
+                val next = preloadCount + 1
+                storyLibrary.insertStory(
+                    categoryId = categoryId,
+                    title = String.format("%08d", next),
+                    body = "",
+                    onlinePageUrl =
+                        deferredZipEntryOnlineUrl(
+                            sourceZipPath = sourceZip.absolutePath,
+                            entryIndex1 = next,
+                            totalEntries = names.size,
+                        ),
+                )
+            }
+            logBridge.postUpdate { it?.copy(progressCompleted = true) }
+            storyLibrary.setCategoryImportFolderTreeUri(
+                categoryId,
+                Uri.fromFile(extractRoot.canonicalFile).toString(),
+            )
+            Triple(catName, preloadCount, categoryId)
         }
-        logBridge.postUpdate { it?.copy(progressCompleted = true) }
-        if (importedStoryCount.get() == 0) {
-            error("Không có file nào có nội dung sau khi chuẩn hoá")
-        }
-        storyLibrary.setCategoryImportFolderTreeUri(
-            categoryId,
-            Uri.fromFile(extractRoot.canonicalFile).toString(),
-        )
-        categoryId
-    }
+    Toast.makeText(
+        activity,
+        "Đã import trước $zipPreloadedCount mục ZIP vào truyện «$zipCategoryName». Các mục sau sẽ nạp dần khi đọc.",
+        Toast.LENGTH_LONG,
+    ).show()
     logBridge.postClear()
     onFinishedArchiveImport(importCategoryId)
 }
@@ -139,11 +118,11 @@ internal suspend fun importOpenedEpubArchiveFromSaf(
 ) {
     logBridge.postUpdate {
         it?.copy(
-            message = "Đang chuẩn bị và đọc EPUB…",
+            message = "Đang chuẩn bị và nhập EPUB (chương đầu)…",
             progressCompleted = false,
         )
     }
-    val (epubCategoryName, importedCount, epubCategoryId) =
+    val (epubCategoryName, epubPreloadedCount, epubCategoryId) =
         withContext(Dispatchers.IO) {
             val catName =
                 safeCategoryNameFromEpubDisplayName(
@@ -151,84 +130,44 @@ internal suspend fun importOpenedEpubArchiveFromSaf(
                 )
             val extractRoot = storyLibrary.prepareZipImportExtractDirectory(catName)
             val categoryId = storyLibrary.getOrCreateCategoryByName(catName)
-            val extractRootCanon = extractRoot.canonicalFile
-            val usedTitles = mutableSetOf<String>()
-            val importedStoryCount = AtomicInteger(0)
-            coroutineScope {
-                val importQueue = Channel<Pair<String, File>>(Channel.UNLIMITED)
-                val importWorker =
-                    launch {
-                        for ((label, file) in importQueue) {
-                            val isNumberedChapter =
-                                file.name.length == 12 &&
-                                    file.name.endsWith(".txt", ignoreCase = true) &&
-                                    file.name.take(8).all { it.isDigit() }
-                            val added =
-                                storyLibrary.importSingleLocalFileAsStoryIfText(
-                                    categoryId,
-                                    extractRootCanon,
-                                    file,
-                                    usedTitles,
-                                    storyTitleOverride =
-                                        if (isNumberedChapter) {
-                                            file.name.take(8)
-                                        } else {
-                                            null
-                                        },
-                                )
-                            if (added) importedStoryCount.incrementAndGet()
-                            logBridge.postUpdate { current ->
-                                if (label.isEmpty()) {
-                                    current
-                                } else {
-                                    current?.copy(
-                                        message =
-                                            if (added) {
-                                                "Đã nhập: $label"
-                                            } else {
-                                                "Đã ghi (bỏ qua / không phải văn): $label"
-                                            },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                try {
-                    importEpubChaptersAsNumberedTxtFiles(
-                        activity,
-                        pickedUri,
-                        extractRoot,
-                        onProgress = { pathInZip ->
-                            logBridge.postUpdate { current ->
-                                val short =
-                                    pathInZip.substringAfterLast('/').ifBlank { pathInZip }
-                                current?.copy(message = "Đang trích chương EPUB: $short")
-                            }
-                        },
-                        onChapterFileWritten = { fileName, file ->
-                            check(importQueue.trySend(fileName to file).isSuccess) {
-                                "Không đưa được file vào hàng đợi nhập"
-                            }
-                        },
-                    )
-                } finally {
-                    importQueue.close()
-                }
-                importWorker.join()
+            val sourceEpub = File(extractRoot, "_source.epub")
+            logBridge.postUpdate { it?.copy(message = "Đang sao chép nguồn EPUB…") }
+            copyPdfUriToLocalFile(activity, pickedUri, sourceEpub)
+            val totalChapters = readEpubChapterCount(sourceEpub)
+            val preloadCount = minOf(1, totalChapters)
+            for (i in 1..preloadCount) {
+                logBridge.postUpdate { it?.copy(message = "Đang đọc chương $i / $preloadCount…") }
+                val body = readEpubChapterPlainText(sourceEpub, i)
+                storyLibrary.insertStory(
+                    categoryId = categoryId,
+                    title = String.format("%08d", i),
+                    body = body,
+                )
+            }
+            if (preloadCount < totalChapters) {
+                val next = preloadCount + 1
+                storyLibrary.insertStory(
+                    categoryId = categoryId,
+                    title = String.format("%08d", next),
+                    body = "",
+                    onlinePageUrl =
+                        deferredEpubChapterOnlineUrl(
+                            sourceEpubPath = sourceEpub.absolutePath,
+                            chapterIndex1 = next,
+                            totalChapters = totalChapters,
+                        ),
+                )
             }
             logBridge.postUpdate { it?.copy(progressCompleted = true) }
-            if (importedStoryCount.get() == 0) {
-                error("Không có file nào có nội dung sau khi chuẩn hoá")
-            }
             storyLibrary.setCategoryImportFolderTreeUri(
                 categoryId,
                 Uri.fromFile(extractRoot.canonicalFile).toString(),
             )
-            Triple(catName, importedStoryCount.get(), categoryId)
+            Triple(catName, preloadCount, categoryId)
         }
     Toast.makeText(
         activity,
-        "Đã import $importedCount chương EPUB vào truyện «$epubCategoryName».",
+        "Đã import trước $epubPreloadedCount chương EPUB vào truyện «$epubCategoryName». Các chương sau sẽ nạp dần khi đọc.",
         Toast.LENGTH_LONG,
     ).show()
     logBridge.postClear()
@@ -245,11 +184,11 @@ internal suspend fun importOpenedPdfArchiveFromSaf(
 ) {
     logBridge.postUpdate {
         it?.copy(
-            message = "Đang chuẩn bị và đọc PDF…",
+            message = "Đang chuẩn bị và nhập PDF (trang đầu)…",
             progressCompleted = false,
         )
     }
-    val (pdfCategoryName, importedCount, pdfCategoryId) =
+    val (pdfCategoryName, preloadedPages, pdfCategoryId) =
         withContext(Dispatchers.IO) {
             val catName =
                 safeCategoryNameFromPdfDisplayName(
@@ -257,82 +196,44 @@ internal suspend fun importOpenedPdfArchiveFromSaf(
                 )
             val extractRoot = storyLibrary.prepareZipImportExtractDirectory(catName)
             val categoryId = storyLibrary.getOrCreateCategoryByName(catName)
-            val extractRootCanon = extractRoot.canonicalFile
-            val usedTitles = mutableSetOf<String>()
-            val importedStoryCount = AtomicInteger(0)
-            coroutineScope {
-                val importQueue = Channel<Pair<String, File>>(Channel.UNLIMITED)
-                val importWorker =
-                    launch {
-                        for ((label, file) in importQueue) {
-                            val isNumberedChapter =
-                                file.name.length == 12 &&
-                                    file.name.endsWith(".txt", ignoreCase = true) &&
-                                    file.name.take(8).all { it.isDigit() }
-                            val added =
-                                storyLibrary.importSingleLocalFileAsStoryIfText(
-                                    categoryId,
-                                    extractRootCanon,
-                                    file,
-                                    usedTitles,
-                                    storyTitleOverride =
-                                        if (isNumberedChapter) {
-                                            file.name.take(8)
-                                        } else {
-                                            null
-                                        },
-                                )
-                            if (added) importedStoryCount.incrementAndGet()
-                            logBridge.postUpdate { current ->
-                                if (label.isEmpty()) {
-                                    current
-                                } else {
-                                    current?.copy(
-                                        message =
-                                            if (added) {
-                                                "Đã nhập: $label"
-                                            } else {
-                                                "Đã ghi (bỏ qua / không phải văn): $label"
-                                            },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                try {
-                    importPdfPagesAsNumberedTxtFiles(
-                        activity,
-                        pickedUri,
-                        extractRoot,
-                        onProgress = { msg ->
-                            logBridge.postUpdate { current ->
-                                current?.copy(message = "Đang trích PDF: $msg")
-                            }
-                        },
-                        onPageFileWritten = { fileName, file ->
-                            check(importQueue.trySend(fileName to file).isSuccess) {
-                                "Không đưa được file vào hàng đợi nhập"
-                            }
-                        },
-                    )
-                } finally {
-                    importQueue.close()
-                }
-                importWorker.join()
+            val sourcePdf = File(extractRoot, "_source.pdf")
+            logBridge.postUpdate { it?.copy(message = "Đang sao chép nguồn PDF…") }
+            copyPdfUriToLocalFile(activity, pickedUri, sourcePdf)
+            val totalPages = readPdfTotalPages(sourcePdf)
+            val preloadPages = minOf(1, totalPages)
+            for (p in 1..preloadPages) {
+                logBridge.postUpdate { it?.copy(message = "Đang trích trang $p / $preloadPages…") }
+                val pageBody = readPdfSinglePageText(sourcePdf, p).trim()
+                storyLibrary.insertStory(
+                    categoryId = categoryId,
+                    title = String.format("%08d", p),
+                    body = pageBody,
+                )
+            }
+            if (preloadPages < totalPages) {
+                val nextPage = preloadPages + 1
+                storyLibrary.insertStory(
+                    categoryId = categoryId,
+                    title = String.format("%08d", nextPage),
+                    body = "",
+                    onlinePageUrl =
+                        deferredPdfPageOnlineUrl(
+                            sourcePdfPath = sourcePdf.absolutePath,
+                            pageIndex1 = nextPage,
+                            totalPages = totalPages,
+                        ),
+                )
             }
             logBridge.postUpdate { it?.copy(progressCompleted = true) }
-            if (importedStoryCount.get() == 0) {
-                error("Không có trang nào có nội dung chữ sau khi đọc PDF.")
-            }
             storyLibrary.setCategoryImportFolderTreeUri(
                 categoryId,
                 Uri.fromFile(extractRoot.canonicalFile).toString(),
             )
-            Triple(catName, importedStoryCount.get(), categoryId)
+            Triple(catName, preloadPages, categoryId)
         }
     Toast.makeText(
         activity,
-        "Đã import $importedCount trang PDF vào truyện «$pdfCategoryName».",
+        "Đã import trước $preloadedPages trang PDF vào truyện «$pdfCategoryName». Các trang sau sẽ nạp dần khi đọc.",
         Toast.LENGTH_LONG,
     ).show()
     logBridge.postClear()

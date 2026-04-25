@@ -17,7 +17,7 @@ object StoryLibraryDbSchema {
      * Phiên bản schema (`SQLiteOpenHelper`).
      * Khi tăng DB: cập nhật cùng lúc hằng số tương ứng trong `StoryLibraryRepository` (open helper).
      */
-    const val DATABASE_VERSION: Int = 10
+    const val DATABASE_VERSION: Int = 11
 
     /** Bảng thể loại. */
     object Categories {

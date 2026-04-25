@@ -40,6 +40,7 @@ internal fun ReaderParagraphSplitSentenceEditParagraphRow(
     textEditorChromeViewOnly: Boolean,
     highlightCurrentSpeakingParagraph: Boolean,
     lastSpeechBookmarkBorder: Boolean,
+    localSelectedBorder: Boolean,
     textSelectionColors: TextSelectionColors,
     paraForEdit: TextFieldValue,
     readOnlyKeyboardHidden: Boolean,
@@ -64,6 +65,7 @@ internal fun ReaderParagraphSplitSentenceEditParagraphRow(
         textEditorChromeViewOnly = textEditorChromeViewOnly,
         highlightCurrentSpeakingParagraph = highlightCurrentSpeakingParagraph,
         lastSpeechBookmarkBorder = lastSpeechBookmarkBorder,
+        localSelectedBorder = localSelectedBorder,
     ) {
         ReaderParagraphSplitSentenceEditCellContent(
             textEditorChromeViewOnly = textEditorChromeViewOnly,

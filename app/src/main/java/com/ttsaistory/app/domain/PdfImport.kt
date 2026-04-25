@@ -12,6 +12,77 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.io.copyTo
 
+private const val PDF_DEFERRED_ONLINE_URL_SCHEME = "pdf-lazy"
+
+data class DeferredPdfPageSpec(
+    val sourcePdfPath: String,
+    val pageIndex1: Int,
+    val totalPages: Int,
+)
+
+fun deferredPdfPageOnlineUrl(
+    sourcePdfPath: String,
+    pageIndex1: Int,
+    totalPages: Int,
+): String {
+    val src = Uri.encode(sourcePdfPath.trim())
+    return "$PDF_DEFERRED_ONLINE_URL_SCHEME://page/$pageIndex1?total=$totalPages&src=$src"
+}
+
+fun parseDeferredPdfPageOnlineUrl(url: String?): DeferredPdfPageSpec? {
+    val u = url?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val uri = runCatching { Uri.parse(u) }.getOrNull() ?: return null
+    if (!uri.scheme.equals(PDF_DEFERRED_ONLINE_URL_SCHEME, ignoreCase = true)) return null
+    if (!uri.host.equals("page", ignoreCase = true)) return null
+    val segs = uri.pathSegments
+    if (segs.isEmpty()) return null
+    val page = segs[0].toIntOrNull() ?: return null
+    val total = uri.getQueryParameter("total")?.toIntOrNull() ?: return null
+    val src = Uri.decode(uri.getQueryParameter("src") ?: return null).trim()
+    if (src.isEmpty() || page <= 0 || total <= 0 || page > total) return null
+    return DeferredPdfPageSpec(sourcePdfPath = src, pageIndex1 = page, totalPages = total)
+}
+
+fun isDeferredPdfPageOnlineUrl(url: String?): Boolean = parseDeferredPdfPageOnlineUrl(url) != null
+
+suspend fun copyPdfUriToLocalFile(
+    context: Context,
+    pdfUri: Uri,
+    outputFile: File,
+) {
+    withContext(Dispatchers.IO) {
+        outputFile.parentFile?.mkdirs()
+        context.contentResolver.openInputStream(pdfUri)?.use { ins ->
+            FileOutputStream(outputFile).use { outs -> ins.copyTo(outs) }
+        } ?: error("Không mở được file PDF")
+    }
+}
+
+suspend fun readPdfTotalPages(pdfFile: File): Int =
+    withContext(Dispatchers.IO) {
+        PDDocument.load(pdfFile).use { doc ->
+            if (doc.isEncrypted) error("PDF có mật khẩu — không hỗ trợ.")
+            val total = doc.numberOfPages
+            if (total <= 0) error("PDF không có trang.")
+            total
+        }
+    }
+
+suspend fun readPdfSinglePageText(pdfFile: File, pageIndex1: Int): String =
+    withContext(Dispatchers.IO) {
+        PDDocument.load(pdfFile).use { doc ->
+            if (doc.isEncrypted) error("PDF có mật khẩu — không hỗ trợ.")
+            if (pageIndex1 !in 1..doc.numberOfPages) return@withContext ""
+            val stripper =
+                PDFTextStripper().apply {
+                    sortByPosition = true
+                    startPage = pageIndex1
+                    endPage = pageIndex1
+                }
+            stripper.getText(doc).trim()
+        }
+    }
+
 private fun normalizePdfLineKey(s: String): String =
     s.trim().replace(Regex("\\s+"), " ").lowercase(Locale.ROOT)
 
@@ -106,6 +177,82 @@ private fun stripPageNumberMargins(lines: List<String>): List<String> {
     return m
 }
 
+private data class PdfHeaderFooterRules(
+    val repeatingTop: Set<String>,
+    val repeatingBottom: Set<String>,
+    val maxBandLines: Int,
+)
+
+private fun detectRepeatedPdfHeaderFooterRules(
+    pageTexts: List<String>,
+    maxBandLines: Int = 5,
+): PdfHeaderFooterRules {
+    if (pageTexts.isEmpty()) {
+        return PdfHeaderFooterRules(
+            repeatingTop = emptySet(),
+            repeatingBottom = emptySet(),
+            maxBandLines = maxBandLines,
+        )
+    }
+    val blocks = pageTexts.map { splitPdfPageLines(it) }
+    val n = blocks.size
+    val minPagesWithLine =
+        when {
+            n <= 1 -> 2
+            n <= 2 -> n
+            n <= 6 -> max(2, (n * 0.5).toInt())
+            else -> max(3, (n * 0.4).toInt())
+        }
+    val topKeyHits = mutableMapOf<String, Int>()
+    val bottomKeyHits = mutableMapOf<String, Int>()
+    for (lines in blocks) {
+        if (lines.isEmpty()) continue
+        val h = maxBandLines.coerceAtMost(lines.size)
+        lines
+            .take(h)
+            .map { normalizePdfLineKey(it) }
+            .filter { it.length >= 3 }
+            .distinct()
+            .forEach { k -> topKeyHits[k] = (topKeyHits[k] ?: 0) + 1 }
+        lines
+            .takeLast(h)
+            .map { normalizePdfLineKey(it) }
+            .filter { it.length >= 3 }
+            .distinct()
+            .forEach { k -> bottomKeyHits[k] = (bottomKeyHits[k] ?: 0) + 1 }
+    }
+    return PdfHeaderFooterRules(
+        repeatingTop = topKeyHits.filter { it.value >= minPagesWithLine }.keys,
+        repeatingBottom = bottomKeyHits.filter { it.value >= minPagesWithLine }.keys,
+        maxBandLines = maxBandLines,
+    )
+}
+
+private fun stripPdfPageByRules(pageText: String, rules: PdfHeaderFooterRules): String {
+    val m = splitPdfPageLines(pageText).toMutableList()
+    while (m.isNotEmpty()) {
+        val k = normalizePdfLineKey(m.first())
+        if (k.length >= 3 && k in rules.repeatingTop) {
+            m.removeAt(0)
+        } else if (isLikelyStandalonePageNumberLine(m.first())) {
+            m.removeAt(0)
+        } else {
+            break
+        }
+    }
+    while (m.isNotEmpty()) {
+        val k = normalizePdfLineKey(m.last())
+        if (k.length >= 3 && k in rules.repeatingBottom) {
+            m.removeAt(m.lastIndex)
+        } else if (isLikelyStandalonePageNumberLine(m.last())) {
+            m.removeAt(m.lastIndex)
+        } else {
+            break
+        }
+    }
+    return stripPageNumberMargins(m).joinToString("\n").trim()
+}
+
 fun uriLooksLikePdf(context: Context, uri: Uri, displayName: String?): Boolean {
     val name = displayName?.trim().orEmpty()
     if (name.endsWith(".pdf", ignoreCase = true)) return true
@@ -134,7 +281,7 @@ suspend fun importPdfPagesAsNumberedTxtFiles(
     pdfUri: Uri,
     destDir: File,
     onProgress: ((String) -> Unit)? = null,
-    onPageFileWritten: ((fileName: String, file: File) -> Unit)? = null,
+    onPageFileWritten: (suspend (fileName: String, file: File) -> Unit)? = null,
 ): Int =
     withContext(Dispatchers.IO) {
         destDir.mkdirs()
@@ -160,23 +307,31 @@ suspend fun importPdfPagesAsNumberedTxtFiles(
                     PDFTextStripper().apply {
                         sortByPosition = true
                     }
-                val rawPages = ArrayList<String>(totalPages)
-                for (p in 1..totalPages) {
-                    onProgress?.invoke("Trang $p / $totalPages")
+                val samplePageLimit = 400
+                val samplePages = ArrayList<String>(minOf(totalPages, samplePageLimit))
+                val probeUntil = minOf(totalPages, samplePageLimit)
+                for (p in 1..probeUntil) {
+                    onProgress?.invoke("Phân tích header/footer: trang $p / $probeUntil")
                     stripper.startPage = p
                     stripper.endPage = p
                     val pageText = stripper.getText(doc).trim()
                     if (pageText.isNotEmpty()) {
-                        rawPages.add(pageText)
+                        samplePages.add(pageText)
                     }
                 }
-                if (rawPages.isEmpty()) {
+                if (samplePages.isEmpty()) {
                     error("Không trích được chữ nào từ PDF (PDF ảnh / trang trống).")
                 }
-                onProgress?.invoke("Đang bỏ header/footer lặp…")
-                val cleanedPages = stripRepeatedPdfHeaderFooter(rawPages)
+                onProgress?.invoke("Đang suy luận header/footer lặp…")
+                val rules = detectRepeatedPdfHeaderFooterRules(samplePages)
                 var written = 0
-                for (pageText in cleanedPages) {
+                for (p in 1..totalPages) {
+                    onProgress?.invoke("Trang $p / $totalPages")
+                    stripper.startPage = p
+                    stripper.endPage = p
+                    val pageTextRaw = stripper.getText(doc).trim()
+                    if (pageTextRaw.isEmpty()) continue
+                    val pageText = stripPdfPageByRules(pageTextRaw, rules)
                     if (pageText.isBlank()) continue
                     written++
                     val name = String.format(Locale.US, "%08d.txt", written)

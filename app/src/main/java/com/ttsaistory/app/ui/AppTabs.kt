@@ -58,9 +58,18 @@ import com.ttsaistory.app.domain.canonicalTextFromRaw
 import com.ttsaistory.app.domain.documentTreeDisplayName
 import com.ttsaistory.app.domain.fetchUrlAsPlainText
 import com.ttsaistory.app.domain.isVietnameseTtsVoice
+import com.ttsaistory.app.domain.parseDeferredEpubChapterOnlineUrl
+import com.ttsaistory.app.domain.parseDeferredPdfPageOnlineUrl
+import com.ttsaistory.app.domain.parseDeferredZipEntryOnlineUrl
 import com.ttsaistory.app.domain.parseHttpUrlFromSharedText
 import com.ttsaistory.app.domain.buildParagraphSpeakJobs
 import com.ttsaistory.app.domain.parseTtsParagraphIndex
+import com.ttsaistory.app.domain.deferredEpubChapterOnlineUrl
+import com.ttsaistory.app.domain.deferredPdfPageOnlineUrl
+import com.ttsaistory.app.domain.deferredZipEntryOnlineUrl
+import com.ttsaistory.app.domain.readEpubChapterPlainText
+import com.ttsaistory.app.domain.readPdfSinglePageText
+import com.ttsaistory.app.domain.readZipTextEntryByIndex
 import com.ttsaistory.app.domain.wordCountForTtsPlaybackWpm
 import com.ttsaistory.app.domain.persistInboundSharedTextToLibrary
 import com.ttsaistory.app.domain.persistOpenedTextFileToLibrary
@@ -86,17 +95,21 @@ import com.ttsaistory.app.ui.fonts.EditorFontConfigDialog
 import com.ttsaistory.app.ui.reader.ExportM4aTopBarState
 import com.ttsaistory.app.ui.SystemTtsSettingsScreen
 import com.ttsaistory.app.ui.reader.ReaderBottomNavBridge
+import com.ttsaistory.app.ui.reader.ReaderService
 import com.ttsaistory.app.model.saveLastText
 import com.ttsaistory.app.speech.ElevenLabsParagraphSpeechEngine
 import com.ttsaistory.app.speech.ParagraphSpeechEngines
 import com.ttsaistory.app.speech.ParagraphSpeechSequenceCallbacks
 import com.ttsaistory.app.speech.SystemParagraphSpeechEngine
 import com.ttsaistory.app.speech.SystemTtsUtteranceProgressSink
+import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -165,7 +178,11 @@ private suspend fun openLibraryStoryByIdForMainTabs(
         return false
     }
     setActiveLibraryStoryId(storyId)
-    if (storyLibrary.storyNeedsOnlineContentRefresh(rowForRefresh)) {
+    val deferredMaterialized =
+        materializeDeferredStoryIfNeeded(storyLibrary, storyId)
+    if (deferredMaterialized) {
+        bumpLibraryRefresh()
+    } else if (storyLibrary.storyNeedsOnlineContentRefresh(rowForRefresh)) {
         try {
             OnlineCategoryHeadlessStoryTextSync.syncOnlineStoryFromWebPage(
                 context = context,
@@ -209,6 +226,259 @@ private suspend fun openLibraryStoryByIdForMainTabs(
     return true
 }
 
+private suspend fun materializeDeferredStoryIfNeeded(
+    storyLibrary: StoryLibraryRepository,
+    storyId: Long,
+): Boolean {
+    val row = storyLibrary.getStory(storyId) ?: return false
+    if (row.onlineContentParseOk) return false
+    val pdfSpec = parseDeferredPdfPageOnlineUrl(row.onlinePageUrl)
+    if (pdfSpec != null) {
+        val body = readPdfSinglePageText(File(pdfSpec.sourcePdfPath), pdfSpec.pageIndex1).trim()
+        if (body.isNotEmpty()) {
+            storyLibrary.updateStoryText(storyId, canonicalTextFromRaw(body))
+        }
+        storyLibrary.markOnlineStoryContentParseSuccess(storyId, null)
+        val nextPage = pdfSpec.pageIndex1 + 1
+        if (nextPage <= pdfSpec.totalPages) {
+            val nextTitle = String.format(Locale.US, "%08d", nextPage)
+            val exists = storyLibrary.listStories(row.categoryId).any { it.title.trim() == nextTitle }
+            if (!exists) {
+                storyLibrary.insertStory(
+                    categoryId = row.categoryId,
+                    title = nextTitle,
+                    body = "",
+                    onlinePageUrl =
+                        deferredPdfPageOnlineUrl(
+                            sourcePdfPath = pdfSpec.sourcePdfPath,
+                            pageIndex1 = nextPage,
+                            totalPages = pdfSpec.totalPages,
+                        ),
+                )
+            }
+        }
+        return true
+    }
+    val zipSpec = parseDeferredZipEntryOnlineUrl(row.onlinePageUrl)
+    if (zipSpec != null) {
+        val body = readZipTextEntryByIndex(File(zipSpec.sourceZipPath), zipSpec.entryIndex1).trim()
+        if (body.isNotEmpty()) {
+            storyLibrary.updateStoryText(storyId, canonicalTextFromRaw(body))
+        }
+        storyLibrary.markOnlineStoryContentParseSuccess(storyId, null)
+        val next = zipSpec.entryIndex1 + 1
+        if (next <= zipSpec.totalEntries) {
+            val nextTitle = String.format(Locale.US, "%08d", next)
+            val exists = storyLibrary.listStories(row.categoryId).any { it.title.trim() == nextTitle }
+            if (!exists) {
+                storyLibrary.insertStory(
+                    categoryId = row.categoryId,
+                    title = nextTitle,
+                    body = "",
+                    onlinePageUrl =
+                        deferredZipEntryOnlineUrl(
+                            sourceZipPath = zipSpec.sourceZipPath,
+                            entryIndex1 = next,
+                            totalEntries = zipSpec.totalEntries,
+                        ),
+                )
+            }
+        }
+        return true
+    }
+    val epubSpec = parseDeferredEpubChapterOnlineUrl(row.onlinePageUrl)
+    if (epubSpec != null) {
+        val body = readEpubChapterPlainText(File(epubSpec.sourceEpubPath), epubSpec.chapterIndex1).trim()
+        if (body.isNotEmpty()) {
+            storyLibrary.updateStoryText(storyId, canonicalTextFromRaw(body))
+        }
+        storyLibrary.markOnlineStoryContentParseSuccess(storyId, null)
+        val next = epubSpec.chapterIndex1 + 1
+        if (next <= epubSpec.totalChapters) {
+            val nextTitle = String.format(Locale.US, "%08d", next)
+            val exists = storyLibrary.listStories(row.categoryId).any { it.title.trim() == nextTitle }
+            if (!exists) {
+                storyLibrary.insertStory(
+                    categoryId = row.categoryId,
+                    title = nextTitle,
+                    body = "",
+                    onlinePageUrl =
+                        deferredEpubChapterOnlineUrl(
+                            sourceEpubPath = epubSpec.sourceEpubPath,
+                            chapterIndex1 = next,
+                            totalChapters = epubSpec.totalChapters,
+                        ),
+                )
+            }
+        }
+        return true
+    }
+    return false
+}
+
+private enum class DeferredImportKind { PDF, ZIP, EPUB }
+
+private data class DeferredImportSource(
+    val kind: DeferredImportKind,
+    val sourcePath: String,
+    val totalItems: Int,
+)
+
+private data class DeferredPrefetchResult(
+    val changed: Boolean,
+    val hasSource: Boolean,
+    val hasRemaining: Boolean,
+)
+
+private fun deferredKindDisplayName(kind: DeferredImportKind): String =
+    when (kind) {
+        DeferredImportKind.PDF -> "PDF"
+        DeferredImportKind.ZIP -> "ZIP"
+        DeferredImportKind.EPUB -> "EPUB"
+    }
+
+private fun parseEightDigitStoryIndex(title: String): Int? {
+    val t = title.trim()
+    if (t.length != 8 || !t.all { it.isDigit() }) return null
+    return t.toIntOrNull()?.takeIf { it > 0 }
+}
+
+private fun resolveDeferredImportSourceFromCategoryRows(
+    rows: List<com.ttsaistory.app.data.LibraryStoryRow>,
+): DeferredImportSource? {
+    for (r in rows) {
+        parseDeferredPdfPageOnlineUrl(r.onlinePageUrl)?.let { s ->
+            return DeferredImportSource(
+                kind = DeferredImportKind.PDF,
+                sourcePath = s.sourcePdfPath,
+                totalItems = s.totalPages,
+            )
+        }
+        parseDeferredZipEntryOnlineUrl(r.onlinePageUrl)?.let { s ->
+            return DeferredImportSource(
+                kind = DeferredImportKind.ZIP,
+                sourcePath = s.sourceZipPath,
+                totalItems = s.totalEntries,
+            )
+        }
+        parseDeferredEpubChapterOnlineUrl(r.onlinePageUrl)?.let { s ->
+            return DeferredImportSource(
+                kind = DeferredImportKind.EPUB,
+                sourcePath = s.sourceEpubPath,
+                totalItems = s.totalChapters,
+            )
+        }
+    }
+    return null
+}
+
+private fun buildDeferredOnlineUrl(
+    source: DeferredImportSource,
+    index1: Int,
+): String =
+    when (source.kind) {
+        DeferredImportKind.PDF ->
+            deferredPdfPageOnlineUrl(source.sourcePath, index1, source.totalItems)
+        DeferredImportKind.ZIP ->
+            deferredZipEntryOnlineUrl(source.sourcePath, index1, source.totalItems)
+        DeferredImportKind.EPUB ->
+            deferredEpubChapterOnlineUrl(source.sourcePath, index1, source.totalItems)
+    }
+
+private suspend fun readDeferredItemText(
+    source: DeferredImportSource,
+    index1: Int,
+): String =
+    when (source.kind) {
+        DeferredImportKind.PDF -> readPdfSinglePageText(File(source.sourcePath), index1)
+        DeferredImportKind.ZIP -> readZipTextEntryByIndex(File(source.sourcePath), index1)
+        DeferredImportKind.EPUB -> readEpubChapterPlainText(File(source.sourcePath), index1)
+    }
+
+private suspend fun ensureDeferredPrefetchWindowFromCurrentStory(
+    storyLibrary: StoryLibraryRepository,
+    currentStoryId: Long,
+    minItemsFromCurrent: Int = 10,
+    startFromFirstPending: Boolean = false,
+    onProcessingItem: ((DeferredImportSource, Int) -> Unit)? = null,
+): DeferredPrefetchResult {
+    val current =
+        storyLibrary.getStory(currentStoryId)
+            ?: return DeferredPrefetchResult(changed = false, hasSource = false, hasRemaining = false)
+    val currentIndex1 =
+        parseEightDigitStoryIndex(current.title)
+            ?: return DeferredPrefetchResult(changed = false, hasSource = false, hasRemaining = false)
+    val rows = storyLibrary.listStories(current.categoryId)
+    val source = resolveDeferredImportSourceFromCategoryRows(rows)
+        ?: return DeferredPrefetchResult(changed = false, hasSource = false, hasRemaining = false)
+    val existingByTitle =
+        rows.associateBy { it.title.trim() }
+    val firstPendingIndex1 =
+        (currentIndex1..source.totalItems).firstOrNull { idx ->
+            val title = String.format(Locale.US, "%08d", idx)
+            val row = existingByTitle[title]
+            row == null || !row.onlineContentParseOk
+        }
+    if (firstPendingIndex1 == null) {
+        return DeferredPrefetchResult(changed = false, hasSource = true, hasRemaining = false)
+    }
+    val startIndex1 = if (startFromFirstPending) firstPendingIndex1 else currentIndex1
+    val endIndex1 = minOf(source.totalItems, startIndex1 + minItemsFromCurrent - 1)
+    if (endIndex1 < startIndex1) {
+        return DeferredPrefetchResult(changed = false, hasSource = true, hasRemaining = false)
+    }
+    var changed = false
+    coroutineScope {
+        val queue = Channel<Int>(16)
+        val producer =
+            launch(Dispatchers.IO) {
+                for (idx in startIndex1..endIndex1) {
+                    queue.send(idx)
+                }
+                queue.close()
+            }
+        val consumer =
+            launch(Dispatchers.IO) {
+                for (idx in queue) {
+                    onProcessingItem?.invoke(source, idx)
+                    val title = String.format(Locale.US, "%08d", idx)
+                    var row =
+                        storyLibrary
+                            .listStories(current.categoryId)
+                            .firstOrNull { it.title.trim() == title }
+                    if (row == null) {
+                        val newId =
+                            storyLibrary.insertStory(
+                                categoryId = current.categoryId,
+                                title = title,
+                                body = "",
+                                onlinePageUrl = buildDeferredOnlineUrl(source, idx),
+                            )
+                        row = storyLibrary.getStory(newId)
+                        changed = true
+                    }
+                    if (row == null || row.onlineContentParseOk) continue
+                    val body = readDeferredItemText(source, idx).trim()
+                    if (body.isNotEmpty()) {
+                        storyLibrary.updateStoryText(row.id, canonicalTextFromRaw(body))
+                    }
+                    storyLibrary.markOnlineStoryContentParseSuccess(row.id, null)
+                    changed = true
+                }
+            }
+        producer.join()
+        consumer.join()
+    }
+    val rowsAfter = storyLibrary.listStories(current.categoryId).associateBy { it.title.trim() }
+    val hasRemaining =
+        (currentIndex1..source.totalItems).any { idx ->
+            val title = String.format(Locale.US, "%08d", idx)
+            val row = rowsAfter[title]
+            row == null || !row.onlineContentParseOk
+        }
+    return DeferredPrefetchResult(changed = changed, hasSource = true, hasRemaining = hasRemaining)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppTabs() {
@@ -230,6 +500,7 @@ fun AppTabs() {
         remember(context) {
             context.applicationContext.getSharedPreferences(AppPreferenceKeys.PREF_NAME, Context.MODE_PRIVATE)
         }
+    val readerService = remember(prefs) { ReaderService(prefs) }
     var text by remember {
         mutableStateOf(
             canonicalTextFromRaw(prefs.getString(AppPreferenceKeys.KEY_LAST_TEXT, "") ?: ""),
@@ -536,6 +807,100 @@ fun AppTabs() {
             libraryFileAutosaveHolder.job = null
         }
         prevLibrarySidForAutosave = now
+    }
+    LaunchedEffect(activeLibraryStoryId, tabIndex) {
+        if (tabIndex != 0) {
+            readerService.deferredFetchWorking = false
+            readerService.deferredFetchProgressLabel = ""
+            return@LaunchedEffect
+        }
+        val sid = activeLibraryStoryId
+        if (sid == null) {
+            readerService.deferredFetchWorking = false
+            readerService.deferredFetchHasRemaining = false
+            readerService.deferredFetchProgressLabel = ""
+            return@LaunchedEffect
+        }
+        do {
+            readerService.deferredFetchWorking = true
+            val result =
+                withContext(Dispatchers.IO) {
+                    ensureDeferredPrefetchWindowFromCurrentStory(
+                        storyLibrary = storyLibrary,
+                        currentStoryId = sid,
+                        minItemsFromCurrent = 10,
+                        startFromFirstPending = false,
+                        onProcessingItem = { source, idx ->
+                            readerService.deferredFetchProgressLabel =
+                                "${deferredKindDisplayName(source.kind)} $idx / ${source.totalItems}"
+                        },
+                    )
+                }
+            readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
+            if (result.changed) {
+                libraryRefreshTrigger++
+            }
+            break
+        } while (true)
+        readerService.deferredFetchWorking = false
+        if (!readerService.deferredFetchHasRemaining) {
+            readerService.deferredFetchProgressLabel = ""
+        }
+    }
+    LaunchedEffect(activeLibraryStoryId, tabIndex, readerService.deferredFetchContinueEnabled) {
+        if (tabIndex != 0 || !readerService.deferredFetchContinueEnabled) {
+            readerService.deferredFetchWorking = false
+            if (!readerService.deferredFetchHasRemaining) {
+                readerService.deferredFetchProgressLabel = ""
+            }
+            return@LaunchedEffect
+        }
+        val sid = activeLibraryStoryId ?: return@LaunchedEffect
+        while (readerService.deferredFetchContinueEnabled && tabIndex == 0) {
+            readerService.deferredFetchWorking = true
+            val result =
+                withContext(Dispatchers.IO) {
+                    ensureDeferredPrefetchWindowFromCurrentStory(
+                        storyLibrary = storyLibrary,
+                        currentStoryId = sid,
+                        minItemsFromCurrent = 10,
+                        startFromFirstPending = true,
+                        onProcessingItem = { source, idx ->
+                            readerService.deferredFetchProgressLabel =
+                                "${deferredKindDisplayName(source.kind)} $idx / ${source.totalItems}"
+                        },
+                    )
+                }
+            readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
+            if (result.changed) {
+                libraryRefreshTrigger++
+            }
+            if (!readerService.deferredFetchHasRemaining) {
+                break
+            }
+            delay(120)
+        }
+        readerService.deferredFetchWorking = false
+        if (!readerService.deferredFetchHasRemaining) {
+            readerService.deferredFetchProgressLabel = ""
+        }
+    }
+    LaunchedEffect(activeLibraryStoryId) {
+        val sid = activeLibraryStoryId ?: run {
+            readerService.deferredFetchHasRemaining = false
+            readerService.deferredFetchContinueEnabled = false
+            readerService.deferredFetchProgressLabel = ""
+            return@LaunchedEffect
+        }
+        val result =
+            withContext(Dispatchers.IO) {
+                ensureDeferredPrefetchWindowFromCurrentStory(
+                    storyLibrary = storyLibrary,
+                    currentStoryId = sid,
+                    minItemsFromCurrent = 1,
+                )
+            }
+        readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
     }
     LaunchedEffect(tabIndex) {
         if (tabIndex != 1) return@LaunchedEffect
@@ -1045,15 +1410,6 @@ fun AppTabs() {
     var systemTtsStoryUtterancesRemaining by remember { mutableIntStateOf(0) }
     /** Số utterance TTS hệ thống đang phát (preview, đọc truyện) — dùng giữ màn hình vì [TextToSpeech.isSpeaking] không gây recompose. */
     var systemTtsUtteranceDepth by remember { mutableIntStateOf(0) }
-    /** Nội dung đoạn đang phát (index gốc → văn đã sanitize) để đếm từ khi đo WPM. */
-    var systemTtsWpmOrigToText by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
-    /** Tổng thời gian phát các utterance đoạn đã hoàn tất (ms, [SystemClock.elapsedRealtime]). */
-    var systemTtsWpmSpeechMsAccum by remember { mutableLongStateOf(0L) }
-    var systemTtsWpmWordsAccum by remember { mutableIntStateOf(0) }
-    /** Thời điểm [SystemClock.elapsedRealtime] khi bắt đầu từng đoạn `tts_para_*` — tránh ghi đè khi nhiều utterance chồng hàng đợi. */
-    val systemTtsWpmStartElapsedByParagraph = remember { mutableStateMapOf<Int, Long>() }
-    /** Làm mới UI WPM định kỳ khi đang phát. */
-    var systemTtsWpmLiveTick by remember { mutableIntStateOf(0) }
     /** Giữ audio focus khi đọc TTS hệ thống — một số máy tắt màn hình không chuyển đoạn nếu app không có focus. */
     var systemTtsAudioFocusRequest by remember { mutableStateOf<AudioFocusRequest?>(null) }
 
@@ -1243,10 +1599,10 @@ fun AppTabs() {
 
     fun stopAllSpeechReading(persistBookmarkOnStop: Boolean = true) {
         systemTtsStoryUtterancesRemaining = 0
-        systemTtsWpmOrigToText = emptyMap()
-        systemTtsWpmSpeechMsAccum = 0L
-        systemTtsWpmWordsAccum = 0
-        systemTtsWpmStartElapsedByParagraph.clear()
+        readerService.systemTtsWpmOrigToText = emptyMap()
+        readerService.systemTtsWpmSpeechMsAccum = 0L
+        readerService.systemTtsWpmWordsAccum = 0
+        readerService.systemTtsWpmStartElapsedByParagraph.clear()
         if (persistBookmarkOnStop) {
             persistBookmarkIfSpeaking()
         }
@@ -1312,10 +1668,10 @@ fun AppTabs() {
         stopAllSpeechReading(persistBookmarkOnStop = false)
         if (textTabSpeechEngine == TextTabSpeechEngine.System) {
             val jobs = buildParagraphSpeakJobs(paragraphs, startIndex)
-            systemTtsWpmOrigToText = jobs.associate { it.first to it.second }
-            systemTtsWpmSpeechMsAccum = 0L
-            systemTtsWpmWordsAccum = 0
-            systemTtsWpmStartElapsedByParagraph.clear()
+            readerService.systemTtsWpmOrigToText = jobs.associate { it.first to it.second }
+            readerService.systemTtsWpmSpeechMsAccum = 0L
+            readerService.systemTtsWpmWordsAccum = 0
+            readerService.systemTtsWpmStartElapsedByParagraph.clear()
         }
         val speechCallbacks =
             ParagraphSpeechSequenceCallbacks(
@@ -1428,7 +1784,7 @@ fun AppTabs() {
                         val p = parseTtsParagraphIndex(utteranceId)
                         speakingParagraphIndex = p ?: -1
                         if (p != null) {
-                            systemTtsWpmStartElapsedByParagraph[p] = SystemClock.elapsedRealtime()
+                            readerService.systemTtsWpmStartElapsedByParagraph[p] = SystemClock.elapsedRealtime()
                         }
                     }
 
@@ -1437,14 +1793,14 @@ fun AppTabs() {
                         val storyRemainingBefore =
                             if (paraIdx != null) systemTtsStoryUtterancesRemaining else 0
                         if (paraIdx != null) {
-                            val start = systemTtsWpmStartElapsedByParagraph.remove(paraIdx)
+                            val start = readerService.systemTtsWpmStartElapsedByParagraph.remove(paraIdx)
                             val now = SystemClock.elapsedRealtime()
                             if (start != null) {
-                                systemTtsWpmSpeechMsAccum += (now - start).coerceAtLeast(0L)
+                                readerService.systemTtsWpmSpeechMsAccum += (now - start).coerceAtLeast(0L)
                             }
-                            val spoken = systemTtsWpmOrigToText[paraIdx]
+                            val spoken = readerService.systemTtsWpmOrigToText[paraIdx]
                             if (!spoken.isNullOrEmpty()) {
-                                systemTtsWpmWordsAccum += wordCountForTtsPlaybackWpm(spoken)
+                                readerService.systemTtsWpmWordsAccum += wordCountForTtsPlaybackWpm(spoken)
                             }
                         }
                         systemTtsUtteranceDepth =
@@ -1477,14 +1833,14 @@ fun AppTabs() {
                     override fun onUtteranceError(utteranceId: String?) {
                         val paraIdxErr = parseTtsParagraphIndex(utteranceId)
                         if (paraIdxErr != null) {
-                            val start = systemTtsWpmStartElapsedByParagraph.remove(paraIdxErr)
+                            val start = readerService.systemTtsWpmStartElapsedByParagraph.remove(paraIdxErr)
                             val now = SystemClock.elapsedRealtime()
                             if (start != null) {
-                                systemTtsWpmSpeechMsAccum += (now - start).coerceAtLeast(0L)
+                                readerService.systemTtsWpmSpeechMsAccum += (now - start).coerceAtLeast(0L)
                             }
-                            val spoken = systemTtsWpmOrigToText[paraIdxErr]
+                            val spoken = readerService.systemTtsWpmOrigToText[paraIdxErr]
                             if (!spoken.isNullOrEmpty()) {
-                                systemTtsWpmWordsAccum += wordCountForTtsPlaybackWpm(spoken)
+                                readerService.systemTtsWpmWordsAccum += wordCountForTtsPlaybackWpm(spoken)
                             }
                         }
                         systemTtsUtteranceDepth =
@@ -1525,32 +1881,32 @@ fun AppTabs() {
     LaunchedEffect(systemTtsPlaybackActive, textTabSpeechEngine) {
         while (playbackActiveForWpmTick.value && engineForWpmTick.value == TextTabSpeechEngine.System) {
             delay(300)
-            systemTtsWpmLiveTick++
+            readerService.systemTtsWpmLiveTick++
         }
     }
 
     val systemTtsMeasuredWpm: Int? = run {
-        systemTtsWpmLiveTick // ghim recompose theo tick khi đang phát
-        systemTtsWpmStartElapsedByParagraph.size // ghim khi bắt đầu đoạn mới (trước onDone)
+        readerService.systemTtsWpmLiveTick // ghim recompose theo tick khi đang phát
+        readerService.systemTtsWpmStartElapsedByParagraph.size // ghim khi bắt đầu đoạn mới (trước onDone)
         speakingParagraphIndex // cập nhật khi chuyển câu (ước lượng câu đầu)
         if (textTabSpeechEngine != TextTabSpeechEngine.System || !systemTtsPlaybackActive) {
             null
         } else {
             val now = SystemClock.elapsedRealtime()
             val partial =
-                systemTtsWpmStartElapsedByParagraph.values
+                readerService.systemTtsWpmStartElapsedByParagraph.values
                     .minOrNull()
                     ?.let { t -> (now - t).coerceAtLeast(0L) }
                     ?: 0L
             // Chỉ các đoạn đã onDone mới có từ trong wordsAccum — mẫu số phải là thời gian tương ứng
             // (speechMsAccum). Cộng partial (đoạn đang đọc) làm tử không đổi → WPM sai thấp.
-            val msCompleted = systemTtsWpmSpeechMsAccum.coerceAtLeast(1L)
+            val msCompleted = readerService.systemTtsWpmSpeechMsAccum.coerceAtLeast(1L)
             val denomInProgress = partial.coerceAtLeast(1L)
             when {
-                systemTtsWpmWordsAccum > 0 ->
-                    ((systemTtsWpmWordsAccum * 60000L + msCompleted / 2) / msCompleted).toInt()
+                readerService.systemTtsWpmWordsAccum > 0 ->
+                    ((readerService.systemTtsWpmWordsAccum * 60000L + msCompleted / 2) / msCompleted).toInt()
                 speakingParagraphIndex >= 0 && partial >= 400L -> {
-                    val txt = systemTtsWpmOrigToText[speakingParagraphIndex]
+                    val txt = readerService.systemTtsWpmOrigToText[speakingParagraphIndex]
                     val w = if (txt.isNullOrBlank()) 0 else wordCountForTtsPlaybackWpm(txt)
                     if (w <= 0) null
                     else ((w * 60000L + denomInProgress / 2) / denomInProgress).toInt()
@@ -1591,6 +1947,7 @@ fun AppTabs() {
             },
             textTabSpeechEngine = textTabSpeechEngine,
             prefs = prefs,
+            readerService = readerService,
             text = text,
             speakingParagraphIndex = speakingParagraphIndex,
             readerBottomNavBridge = readerBottomNavBridge,

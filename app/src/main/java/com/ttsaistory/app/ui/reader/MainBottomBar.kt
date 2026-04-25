@@ -1,5 +1,6 @@
 package com.ttsaistory.app.ui.reader
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,12 +11,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.LastPage
 import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FirstPage
@@ -33,7 +36,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -43,17 +45,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.ttsaistory.app.AnrDiagLog
-import com.ttsaistory.app.domain.ParagraphTextService
 import com.ttsaistory.app.model.TextTabSpeechEngine
 import kotlin.math.roundToInt
-import com.ttsaistory.app.domain.splitIntoParagraphs
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 @Composable
 fun MainBottomBar(
+    readerService: ReaderService,
     tabIndex: Int,
     text: String,
     speakingParagraphIndex: Int,
@@ -67,68 +65,19 @@ fun MainBottomBar(
     /** WPM ước lượng; null trong câu đầu chưa có câu nào đọc xong. */
     systemTtsMeasuredWpm: Int?,
 ) {
-    val paragraphServiceTotal by ParagraphTextService.totalItemCount.collectAsState(initial = null)
-    // Không key theo [text]: tránh splitIntoParagraphs toàn văn mỗi lần gõ; chỉ khi vào tab Text
-    // (lần đầu hoặc từ tab khác) hoặc đổi truyện/sync ([librarySyncEpoch], [activeLibraryStoryId]).
-    // [readerBottomNavBridge?.paragraphSplitMode]: khi bật theo câu (lưới), [text] có thể rỗng / chưa flush
-    // trong khi nội dung nằm ở ô — không gán 0; tổng câu lấy từ bridge (toolbar) sau split.
-    // Tổng từ văn bản tab Text đồng bộ qua [ParagraphTextService.totalItemCount] (parse cập nhật).
-    LaunchedEffect(
-        tabIndex,
-        librarySyncEpoch,
-        activeLibraryStoryId,
-        readerBottomNavBridge?.paragraphSplitMode,
-    ) {
-        if (tabIndex != 0) return@LaunchedEffect
-        if (text.isEmpty()) {
-            if (readerBottomNavBridge?.paragraphSplitMode == true) {
-                AnrDiagLog.i(
-                    "MainBottomBar speakableCount text empty paragraph mode -> defer toolbar",
-                )
-            } else {
-                val t0 =
-                    AnrDiagLog.begin(
-                        "MainBottomBar splitIntoParagraphs(empty) tab=$tabIndex epoch=$librarySyncEpoch sid=$activeLibraryStoryId",
-                    )
-                withContext(Dispatchers.Default) { splitIntoParagraphs("") }
-                AnrDiagLog.end("MainBottomBar splitIntoParagraphs(empty) -> service total", t0)
-            }
-            return@LaunchedEffect
-        }
-        val snap = text
-        val t0 =
-            AnrDiagLog.begin(
-                "MainBottomBar splitIntoParagraphs len=${snap.length} tab=$tabIndex epoch=$librarySyncEpoch sid=$activeLibraryStoryId",
-            )
-        withContext(Dispatchers.Default) { splitIntoParagraphs(snap) }
-        if (snap == text) {
-            AnrDiagLog.end("MainBottomBar splitIntoParagraphs (ParagraphTextService total updated)", t0)
-        } else {
-            AnrDiagLog.i("MainBottomBar speakableCount dropped (text changed mid-job)")
-        }
-    }
+    val paragraphServiceTotal by readerService.totalItemCount.collectAsState(initial = null)
     val navBridge = readerBottomNavBridge
-    val toolbarSpeakableTotal = if (tabIndex == 0) navBridge?.ttsSpeakableSentenceTotal else null
     val toolbarWorking = tabIndex == 0 && navBridge?.ttsSentenceSplitWorking == true
-    val paragraphSplit = tabIndex == 0 && navBridge?.paragraphSplitMode == true
-    // Sau khi chọn truyện mới, bridge có thể vài frame vẫn giữ [ttsSpeakableSentenceTotal] của file
-    // cũ; [ParagraphTextService.totalItemCount] cập nhật ngay sau parse [text] trong LaunchedEffect.
-    // Chỉ khi lưới câu + [text] rỗng (nội dung nằm ở ô) mới ưu tiên tổng từ toolbar.
     val totalSpeakable =
         when {
             tabIndex != 0 -> 0
-            paragraphSplit && text.isEmpty() ->
-                toolbarSpeakableTotal ?: (paragraphServiceTotal ?: 0)
             paragraphServiceTotal != null -> paragraphServiceTotal!!
-            toolbarSpeakableTotal != null -> toolbarSpeakableTotal
             else -> 0
         }
-    // Chỉ "đang tính" khi chưa có cả tổng từ service lẫn từ toolbar; không kẹt vì chế độ lưới câu
-    // trong khi service đã có — khi [text] không rỗng, tổng từ parse ([paragraphServiceTotal]) đi trước.
+    // Chỉ "đang tính" khi service chưa có tổng.
     val progressStillLoading =
         tabIndex == 0 &&
                 !toolbarWorking &&
-                toolbarSpeakableTotal == null &&
                 paragraphServiceTotal == null
     SideEffect {
         if (tabIndex == 0) {
@@ -231,20 +180,35 @@ fun MainBottomBar(
                                 )
                             }
                             key(nav.paragraphFocusSliderMax) {
-                                Slider(
-                                    modifier = Modifier.weight(1f),
-                                    value = nav.paragraphFocusSliderValue.toFloat(),
-                                    onValueChange = { f ->
-                                        nav.onParagraphFocusSliderChange(
-                                            f.roundToInt().coerceIn(0, nav.paragraphFocusSliderMax),
-                                        )
-                                    },
-                                    onValueChangeFinished = {
-                                        nav.onParagraphFocusSliderFocusCommitted()
-                                    },
-                                    valueRange = 0f..nav.paragraphFocusSliderMax.toFloat(),
-                                    steps = 0,
-                                )
+                                Box(modifier = Modifier.weight(1f)) {
+                                    Slider(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        value = nav.paragraphFocusSliderValue.toFloat(),
+                                        onValueChange = { f ->
+                                            nav.onParagraphFocusSliderChange(
+                                                f.roundToInt().coerceIn(0, nav.paragraphFocusSliderMax),
+                                            )
+                                        },
+                                        onValueChangeFinished = {
+                                            nav.onParagraphFocusSliderFocusCommitted()
+                                        },
+                                        valueRange = 0f..nav.paragraphFocusSliderMax.toFloat(),
+                                        steps = 0,
+                                    )
+                                    Text(
+                                        text = nav.paragraphFocusSliderValue.toString(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier =
+                                            Modifier
+                                                .align(Alignment.Center)
+                                                .background(
+                                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                )
+                                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                                    )
+                                }
                             }
                             IconButton(
                                 onClick = {
@@ -316,10 +280,20 @@ fun MainBottomBar(
                                     contentDescription = "Xóa nội dung câu",
                                 )
                             }
+                            IconButton(
+                                onClick = { nav.onParagraphSplitEditBreakPage() },
+                                enabled = nav.paragraphSplitEditBreakPageEnabled,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.ContentCut,
+                                    contentDescription = "Tách chương: phần từ câu hiện tại tới hết thành chương mới",
+                                )
+                            }
                         }
                     }
                     val prefetchLines = nav?.webPrefetchChapterQueueLines.orEmpty()
-                    if (prefetchLines.isNotEmpty()) {
+                    val deferredProgress = readerService.deferredFetchProgressLabel.trim()
+                    if (prefetchLines.isNotEmpty() || deferredProgress.isNotEmpty()) {
                         Column(
                             modifier =
                                 Modifier
@@ -327,6 +301,14 @@ fun MainBottomBar(
                                     .heightIn(max = 96.dp)
                                     .padding(horizontal = 12.dp, vertical = 4.dp),
                         ) {
+                            if (deferredProgress.isNotEmpty()) {
+                                Text(
+                                    text = "Đang nạp: $deferredProgress",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    maxLines = 1,
+                                )
+                            }
                             prefetchLines.take(5).forEach { line ->
                                 Text(
                                     text = line,

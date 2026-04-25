@@ -223,7 +223,7 @@ private class StoryLibraryOpenHelper(context: Context) :
 
     companion object {
         const val DB_NAME = "story_library.db"
-        const val DB_VERSION = 10
+        const val DB_VERSION = 11
         const val DEFAULT_CATEGORY_NAME = "Chưa phân loại"
     }
 }
@@ -954,7 +954,12 @@ class StoryLibraryRepository(private val context: Context) {
     /** Có [online_page_url] nhưng chưa parse nội dung web thành công → cần tải lại khi mở. */
     fun storyNeedsOnlineContentRefresh(row: LibraryStoryRow): Boolean =
         !row.onlineContentParseOk &&
-            !row.onlinePageUrl.isNullOrBlank()
+            row.onlinePageUrl
+                ?.trim()
+                ?.let { url ->
+                    val s = Uri.parse(url).scheme?.lowercase(Locale.ROOT)
+                    s == "http" || s == "https"
+                } == true
 
     /**
      * Sau khi trích nội dung từ WebView thành công (trang đã tải không lỗi): đánh dấu parse xong

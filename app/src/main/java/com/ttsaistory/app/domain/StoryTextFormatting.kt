@@ -25,16 +25,9 @@ fun paragraphsForEditor(raw: String): List<String> {
     return if (parts.isEmpty()) listOf("") else parts
 }
 
-/**
- * Một hàng lưới: mỗi ô một câu (theo [ParagraphTextService.chapterParagraphs]).
- * Phải gọi [ParagraphTextService.setChapterText] với đúng raw chương trước (thường trong cùng luồng nền);
- * có thể truyền thêm `chapterId` và repository để ghi thư viện khi chuỗi sau parse khác raw.
- */
-fun paragraphMainGroupsForEditor(): List<List<String>> {
-    val cells =
-        ParagraphTextService.chapterParagraphs.value.map(::sanitizeParagraphText).filter {
-            it.isNotEmpty()
-        }
+/** Một hàng lưới: mỗi ô một câu từ snapshot parse hiện tại. */
+fun paragraphMainGroupsForEditor(chapterParagraphs: List<String>): List<List<String>> {
+    val cells = chapterParagraphs.map(::sanitizeParagraphText).filter { it.isNotEmpty() }
     return if (cells.isEmpty()) {
         listOf(listOf(""))
     } else {

@@ -30,6 +30,7 @@ import com.ttsaistory.app.ui.fonts.editorLineHeightSp
 
 /** Viền ô bookmark `last_speech_sentence_index` (chỉ xem, không phát). */
 private val LastSpeechBookmarkBorderColor = Color(0xFF4527A0)
+private val LocalSelectedSentenceBorderColor = Color(0xFFFF9800)
 
 /**
  * Khung hàng chung cho ô câu (nền ô sửa, viền bookmark tím, viền câu đang phát = [primary]).
@@ -40,6 +41,7 @@ internal fun ReaderParagraphSplitSentenceCellRowFrame(
     textEditorChromeViewOnly: Boolean,
     highlightCurrentSpeakingParagraph: Boolean,
     lastSpeechBookmarkBorder: Boolean,
+    localSelectedBorder: Boolean,
     content: @Composable RowScope.() -> Unit,
 ) {
     val bookmarkShape = RoundedCornerShape(6.dp)
@@ -53,6 +55,13 @@ internal fun ReaderParagraphSplitSentenceCellRowFrame(
                 .then(
                     if (lastSpeechBookmarkBorder && textEditorChromeViewOnly) {
                         Modifier.border(2.dp, LastSpeechBookmarkBorderColor, bookmarkShape)
+                    } else {
+                        Modifier
+                    },
+                )
+                .then(
+                    if (localSelectedBorder) {
+                        Modifier.border(2.dp, LocalSelectedSentenceBorderColor, outerShape)
                     } else {
                         Modifier
                     },
@@ -102,6 +111,7 @@ internal fun ReaderParagraphSplitSentenceLazyGrid(
     elevenLabsJobActive: Boolean,
     paragraphSplitMode: Boolean,
     focusedParagraphIndex: Int,
+    localSelectedParagraphIndex: Int,
     flatItemCount: Int,
     paragraphFocusRequestToken: Int,
     readerKeyboardForceHidden: Boolean,
@@ -153,8 +163,10 @@ internal fun ReaderParagraphSplitSentenceLazyGrid(
                 }
             val highlightCurrentSpeakingParagraph =
                 speakingParagraphIndex >= 0 && ttsStartAtCell == speakingParagraphIndex
+            val localSelectedBorder = textEditorChromeViewOnly && localSelectedParagraphIndex == flatIdx
             val lastSpeechBookmarkBorder =
                 textEditorChromeViewOnly &&
+                    !localSelectedBorder &&
                     speakingParagraphIndex < 0 &&
                     !systemTtsPlaybackActive &&
                     !elevenLabsJobActive &&
@@ -204,6 +216,7 @@ internal fun ReaderParagraphSplitSentenceLazyGrid(
                 textEditorChromeViewOnly = textEditorChromeViewOnly,
                 highlightCurrentSpeakingParagraph = highlightCurrentSpeakingParagraph,
                 lastSpeechBookmarkBorder = lastSpeechBookmarkBorder,
+                localSelectedBorder = localSelectedBorder,
                 textSelectionColors = paragraphCellSelectionColors,
                 paraForEdit = paraForEdit,
                 readOnlyKeyboardHidden = readOnlyCell,
