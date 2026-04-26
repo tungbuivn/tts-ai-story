@@ -365,6 +365,7 @@ fun ReaderTab(
                 context = ctx,
                 startStoryId = sid,
                 repository = libraryRepository,
+                readerService = readerService,
                 onLibraryDataChanged = onLibraryDataChanged,
                 onPrefetchQueueLines = { webPrefetchChapterQueueLines = it },
                 onQueueTargetStoryId = { webStoryQueueTargetStoryId = it },
@@ -386,6 +387,7 @@ fun ReaderTab(
             context = ctx,
             anchorLibraryStoryId = sid,
             repository = libraryRepository,
+            readerService = readerService,
             onLibraryDataChanged = onLibraryDataChanged,
             onQueueTargetStoryId = { webStoryQueueTargetStoryId = it },
         )
@@ -512,6 +514,18 @@ fun ReaderTab(
             withContext(Dispatchers.IO) {
                 libraryRepository.updateLastSpeechSentenceIndex(sid, next)
             }
+        }
+    }
+    val readerVoicePlaybackActive =
+        speakingParagraphIndex >= 0 ||
+            (speechEngine == TextTabSpeechEngine.System && systemTtsPlaybackActive) ||
+            (speechEngine == TextTabSpeechEngine.ElevenLabs && elevenLabsJobActive)
+    SideEffect {
+        readerService.isPlaying = readerVoicePlaybackActive
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            readerService.isPlaying = false
         }
     }
     val latestParagraphSplit by rememberUpdatedState(readerService.paragraphSplitMode)
@@ -961,6 +975,7 @@ fun ReaderTab(
 
     /** Chỉ ghi `last_speech_sentence_index` khi user bấm Play. */
     fun persistLastSpeakingIndexForPlay(ttsParagraphIndex: Int) {
+        readerService.paragraphLocalSelectedFlatIndex = -1
         val sid = activeLibraryStoryId ?: return
         if (sid <= 0L) return
         val tts = ttsParagraphIndex.coerceAtLeast(0)
@@ -1986,6 +2001,7 @@ fun ReaderTab(
                                 storyId = sid,
                                 repository = libraryRepository,
                                 bypassHttpCache = true,
+                                readerService = readerService,
                             )
                             val body =
                                 withContext(Dispatchers.IO) {
@@ -2514,6 +2530,7 @@ fun ReaderTab(
                 dbLastSpeechSentenceIndex0 = dbLastSpeechSentenceIndex0,
                 systemTtsPlaybackActive = systemTtsPlaybackActive,
                 elevenLabsJobActive = elevenLabsJobActive,
+                voicePlaybackActive = readerVoicePlaybackActive,
                 paragraphSplitMode = readerService.paragraphSplitMode,
                 focusedParagraphIndex = readerSplitFlatFocusIndex,
                 localSelectedParagraphIndex = readerService.paragraphLocalSelectedFlatIndex,

@@ -8,10 +8,13 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.ttsaistory.app.data.OnlineDomainParserRow
 import com.ttsaistory.app.data.StoryLibraryRepository
+import com.ttsaistory.app.data.normalizedOnlineParserDomainKey
 import com.ttsaistory.app.domain.ParagraphTextService
 import com.ttsaistory.app.domain.sanitizeParagraphText
 import com.ttsaistory.app.model.AppPreferenceKeys
+import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,6 +44,12 @@ class ReaderService(prefs: SharedPreferences) {
 
     /** Ô câu user vừa chạm/chọn trong view theo đoạn (viền cam cục bộ). */
     var paragraphLocalSelectedFlatIndex: Int by mutableIntStateOf(-1)
+
+    /**
+     * Đang phát TTS (theo đoạn / hệ thống / ElevenLabs) — dùng để không vẽ viền cam chọn ô
+     * khi đọc; [ReaderTab] cập nhật mỗi composition.
+     */
+    var isPlaying: Boolean by mutableStateOf(false)
 
     /** Ẩn bàn phím mềm khi đọc (ReaderTab vẫn ghi prefs khi đổi). */
     var readerKeyboardForceHidden: Boolean by mutableStateOf(
@@ -79,6 +88,32 @@ class ReaderService(prefs: SharedPreferences) {
     var deferredFetchWorking: Boolean by mutableStateOf(false)
     /** Nhãn tiến trình deferred fetch để hiển thị ở bottom bar (vd. "PDF 12 / 300"). */
     var deferredFetchProgressLabel: String by mutableStateOf("")
+
+    /**
+     * Parser online theo domain (bảng `online_domain_parsers`) — cache trong service để
+     * headless sync / prefetch dùng bản mới nhất mà không phụ thuộc copy selector lên thể loại.
+     * Khóa: [normalizedOnlineParserDomainKey] (host thường, không `www.`).
+     */
+    private var onlineDomainParsersByKey: Map<String, OnlineDomainParserRow> by mutableStateOf(emptyMap())
+
+    fun replaceOnlineDomainParsersCache(rows: List<OnlineDomainParserRow>) {
+        onlineDomainParsersByKey =
+            rows.associateBy { r ->
+                r.domain.trim().lowercase(Locale.ROOT).removePrefix("www.").trim()
+            }
+    }
+
+    /**
+     * Selector nội dung + selector trang kế từ cache parser cho [pageUrl].
+     * `null` nếu không có domain / không có parser / không có selector nội dung.
+     */
+    fun selectorsForOnlinePage(pageUrl: String): Pair<List<String>, String?>? {
+        val key = normalizedOnlineParserDomainKey(pageUrl) ?: return null
+        val row = onlineDomainParsersByKey[key] ?: return null
+        val content = row.contentSelectors.map { it.trim() }.filter { it.isNotEmpty() }
+        if (content.isEmpty()) return null
+        return content to row.onlineNextPageSelector
+    }
 
     /**
      * Parse [text] -> [chapterParagraphs]/[chapterText] và cập nhật [totalItemCount].

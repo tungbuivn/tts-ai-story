@@ -66,6 +66,8 @@ private fun editorTextToContentSelectors(text: String): List<String> =
 fun DialogOnlineDomainParsersManage(
     repository: StoryLibraryRepository,
     onDismissRequest: () -> Unit,
+    /** Gọi sau khi DB parser đổi — ví dụ làm mới cache trong [com.ttsaistory.app.ui.reader.ReaderService]. */
+    onParsersMutated: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -152,6 +154,7 @@ fun DialogOnlineDomainParsersManage(
                     }
                     Toast.makeText(ctx, "Đã nhập ${entries.size} parser", Toast.LENGTH_SHORT).show()
                     listEpoch++
+                    onParsersMutated()
                 } catch (e: Exception) {
                     Toast.makeText(
                         ctx,
@@ -233,6 +236,7 @@ fun DialogOnlineDomainParsersManage(
                                                 }
                                                 Toast.makeText(ctx, "Đã xóa", Toast.LENGTH_SHORT).show()
                                                 listEpoch++
+                                                onParsersMutated()
                                             } catch (e: Exception) {
                                                 Toast.makeText(
                                                     ctx,
@@ -352,6 +356,7 @@ fun DialogOnlineDomainParsersManage(
                                         nextPageDraft = ""
                                         contentDraft = ""
                                         listEpoch++
+                                        onParsersMutated()
                                     } catch (e: Exception) {
                                         Toast.makeText(
                                             ctx,
@@ -439,6 +444,7 @@ fun DialogOnlineDomainParsersManage(
                                 Toast.makeText(ctx, "Đã cập nhật", Toast.LENGTH_SHORT).show()
                                 editingRow = null
                                 listEpoch++
+                                onParsersMutated()
                             } catch (e: Exception) {
                                 Toast.makeText(
                                     ctx,

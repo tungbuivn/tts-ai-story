@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.data.normalizeOnlineStoryPageUrlForMatch
+import com.ttsaistory.app.ui.reader.ReaderService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -31,6 +32,7 @@ object OnlineWebStoryViewAheadPreload {
         context: Context,
         anchorLibraryStoryId: Long,
         repository: StoryLibraryRepository,
+        readerService: ReaderService? = null,
         onLibraryDataChanged: () -> Unit,
         onQueueTargetStoryId: (Long?) -> Unit = {},
     ) {
@@ -65,6 +67,7 @@ object OnlineWebStoryViewAheadPreload {
                         context = app,
                         storyId = targetId,
                         repository = repository,
+                        readerService = readerService,
                     )
                 if (!ok) break
                 lastWebFetchElapsedMs = SystemClock.elapsedRealtime()
@@ -121,6 +124,7 @@ object OnlineWebStoryViewAheadPreload {
         context: Context,
         storyId: Long,
         repository: StoryLibraryRepository,
+        readerService: ReaderService?,
     ): Boolean {
         for (attempt in 1..MAX_ATTEMPTS_PER_WEB_FETCH) {
             try {
@@ -129,6 +133,7 @@ object OnlineWebStoryViewAheadPreload {
                     storyId = storyId,
                     repository = repository,
                     bypassHttpCache = false,
+                    readerService = readerService,
                 )
                 return true
             } catch (e: CancellationException) {

@@ -123,6 +123,7 @@ import kotlinx.coroutines.yield
 private suspend fun openLibraryStoryByIdForMainTabs(
     context: Context,
     storyLibrary: StoryLibraryRepository,
+    readerService: ReaderService,
     storyId: Long,
     previousActiveLibraryStoryId: Long?,
     stopAllSpeechReading: () -> Unit,
@@ -188,6 +189,7 @@ private suspend fun openLibraryStoryByIdForMainTabs(
                 context = context,
                 storyId = storyId,
                 repository = storyLibrary,
+                readerService = readerService,
             )
             bumpLibraryRefresh()
         } catch (e: Exception) {
@@ -234,7 +236,14 @@ private suspend fun materializeDeferredStoryIfNeeded(
     if (row.onlineContentParseOk) return false
     val pdfSpec = parseDeferredPdfPageOnlineUrl(row.onlinePageUrl)
     if (pdfSpec != null) {
-        val body = readPdfSinglePageText(File(pdfSpec.sourcePdfPath), pdfSpec.pageIndex1).trim()
+        val body =
+            try {
+                readPdfSinglePageText(File(pdfSpec.sourcePdfPath), pdfSpec.pageIndex1).trim()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: OutOfMemoryError) {
+                return false
+            }
         if (body.isNotEmpty()) {
             storyLibrary.updateStoryText(storyId, canonicalTextFromRaw(body))
         }
@@ -455,15 +464,54 @@ private suspend fun ensureDeferredPrefetchWindowFromCurrentStory(
                                 onlinePageUrl = buildDeferredOnlineUrl(source, idx),
                             )
                         row = storyLibrary.getStory(newId)
+                        // Chèn lại chương bị thiếu theo vị trí logic: sau chương gần nhất đứng trước nó.
+                        val storiesNow = storyLibrary.listStories(current.categoryId)
+                        val idsNow = storiesNow.map { it.id }.toMutableList()
+                        val insertedPos = idsNow.indexOf(newId)
+                        if (insertedPos >= 0) {
+                            idsNow.removeAt(insertedPos)
+                            val predecessorId =
+                                storiesNow
+                                    .asSequence()
+                                    .filter { parseEightDigitStoryIndex(it.title)?.let { n -> n < idx } == true }
+                                    .maxWithOrNull(
+                                        compareBy<com.ttsaistory.app.data.LibraryStoryRow> {
+                                            parseEightDigitStoryIndex(it.title) ?: Int.MIN_VALUE
+                                        }.thenBy { it.sortOrder }
+                                            .thenBy { it.id },
+                                    )?.id
+                            val targetPos =
+                                if (predecessorId == null) {
+                                    0
+                                } else {
+                                    (idsNow.indexOf(predecessorId) + 1).coerceAtLeast(0)
+                                }
+                            idsNow.add(targetPos.coerceIn(0, idsNow.size), newId)
+                            storyLibrary.reorderStoriesDisplayOrder(current.categoryId, idsNow)
+                        }
                         changed = true
                     }
                     if (row == null || row.onlineContentParseOk) continue
-                    val body = readDeferredItemText(source, idx).trim()
-                    if (body.isNotEmpty()) {
-                        storyLibrary.updateStoryText(row.id, canonicalTextFromRaw(body))
+                    try {
+                        val body = readDeferredItemText(source, idx).trim()
+                        if (body.isNotEmpty()) {
+                            storyLibrary.updateStoryText(row.id, canonicalTextFromRaw(body))
+                        }
+                        storyLibrary.markOnlineStoryContentParseSuccess(row.id, null)
+                        changed = true
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (oom: OutOfMemoryError) {
+                        AnrDiagLog.i(
+                            "Deferred prefetch skipped ${deferredKindDisplayName(source.kind)} $idx/${source.totalItems}: OOM during item processing",
+                        )
+                        continue
+                    } catch (e: Exception) {
+                        AnrDiagLog.i(
+                            "Deferred prefetch skipped ${deferredKindDisplayName(source.kind)} $idx/${source.totalItems}: ${e.message ?: "unknown"}",
+                        )
+                        continue
                     }
-                    storyLibrary.markOnlineStoryContentParseSuccess(row.id, null)
-                    changed = true
                 }
             }
         producer.join()
@@ -517,6 +565,13 @@ fun AppTabs() {
         mutableStateOf(initial)
     }
     var libraryRefreshTrigger by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit, libraryRefreshTrigger) {
+        val rows =
+            withContext(Dispatchers.IO) {
+                storyLibrary.listOnlineDomainParsers()
+            }
+        readerService.replaceOnlineDomainParsersCache(rows)
+    }
     /** Tăng khi mở truyện từ thư viện / ghi file thư viện — ép đồng bộ lại ô theo đoạn với [text]. */
     var librarySyncEpoch by remember { mutableIntStateOf(0) }
     var libraryToolbarCommand by remember { mutableStateOf<LibraryCategoryToolbarCommand?>(null) }
@@ -1637,6 +1692,7 @@ fun AppTabs() {
                     openLibraryStoryByIdForMainTabs(
                         context = context,
                         storyLibrary = storyLibrary,
+                        readerService = readerService,
                         storyId = firstId,
                         previousActiveLibraryStoryId = prev,
                         stopAllSpeechReading = {
@@ -2041,6 +2097,7 @@ fun AppTabs() {
                 openLibraryStoryByIdForMainTabs(
                     context = context,
                     storyLibrary = storyLibrary,
+                    readerService = readerService,
                     storyId = storyId,
                     previousActiveLibraryStoryId = latestActiveLibraryStoryId,
                     stopAllSpeechReading = { stopAllSpeechReading() },

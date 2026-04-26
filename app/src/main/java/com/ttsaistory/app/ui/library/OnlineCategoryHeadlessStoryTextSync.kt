@@ -12,6 +12,7 @@ import android.webkit.WebViewClient
 import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.domain.canonicalTextFromRaw
 import com.ttsaistory.app.domain.ParagraphTextService
+import com.ttsaistory.app.ui.reader.ReaderService
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -27,6 +28,7 @@ object OnlineCategoryHeadlessStoryTextSync {
         categoryId: Long,
         pageUrl: String,
         repository: StoryLibraryRepository,
+        readerService: ReaderService? = null,
     ) {
         val firstStoryId =
             withContext(Dispatchers.IO) {
@@ -38,6 +40,7 @@ object OnlineCategoryHeadlessStoryTextSync {
             categoryId = categoryId,
             pageUrl = pageUrl,
             repository = repository,
+            readerService = readerService,
         )
     }
 
@@ -46,6 +49,7 @@ object OnlineCategoryHeadlessStoryTextSync {
         storyId: Long,
         repository: StoryLibraryRepository,
         bypassHttpCache: Boolean = false,
+        readerService: ReaderService? = null,
     ) {
         val row =
             withContext(Dispatchers.IO) {
@@ -61,6 +65,7 @@ object OnlineCategoryHeadlessStoryTextSync {
             pageUrl = url,
             repository = repository,
             bypassHttpCache = bypassHttpCache,
+            readerService = readerService,
         )
     }
 
@@ -72,14 +77,17 @@ object OnlineCategoryHeadlessStoryTextSync {
         pageUrl: String,
         repository: StoryLibraryRepository,
         bypassHttpCache: Boolean = false,
+        readerService: ReaderService? = null,
     ) {
+        val fromReader = readerService?.selectorsForOnlinePage(pageUrl)
         val selectors =
-            withContext(Dispatchers.IO) {
-                repository
-                    .getOnlineContentSelectorsForCategory(categoryId)
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-            }
+            fromReader?.first?.takeIf { it.isNotEmpty() }
+                ?: withContext(Dispatchers.IO) {
+                    repository
+                        .getOnlineContentSelectorsForCategory(categoryId)
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                }
         if (selectors.isEmpty()) {
             error("Chưa có selector nội dung")
         }
@@ -163,8 +171,12 @@ object OnlineCategoryHeadlessStoryTextSync {
                 val raw = extractPlainTextFromWebViewForSelectors(wv, multiline)
                 val baseForNext = wv.url?.trim()?.takeIf { it.isNotEmpty() } ?: pageUrl
                 val nextSel =
-                    withContext(Dispatchers.IO) {
-                        repository.getOnlineNextPageSelectorForCategory(categoryId)
+                    if (fromReader != null && fromReader.first.isNotEmpty()) {
+                        fromReader.second
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            repository.getOnlineNextPageSelectorForCategory(categoryId)
+                        }
                     }
                 val nextUrl =
                     resolveNextPageAbsoluteUrlFromWebView(

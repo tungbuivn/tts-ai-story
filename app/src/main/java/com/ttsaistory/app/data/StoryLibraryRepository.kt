@@ -361,13 +361,6 @@ class StoryLibraryRepository(private val context: Context) {
             runCatching { categoryDir(id).deleteRecursively() }
             throw e
         }
-        runCatching {
-            findOnlineDomainParserForPageUrl(url)?.let { parser ->
-                setOnlineNextPageSelectorForCategory(id, parser.onlineNextPageSelector)
-                replaceOnlineContentSelectors(id, parser.contentSelectors)
-                resetOnlineContentParseStateForStoriesInCategory(id)
-            }
-        }
         return id to url
     }
 

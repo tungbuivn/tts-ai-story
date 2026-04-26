@@ -38,7 +38,7 @@ fun normalizeParagraphSplitCellSentenceCase(
     text: String,
     locale: Locale = Locale.getDefault(),
 ): String =
-    text.split("\n").joinToString("\n") { line ->
+    text.split('\n').joinToString("\n") { line ->
         if (line.isEmpty()) {
             line
         } else {

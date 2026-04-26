@@ -7,6 +7,7 @@ import com.ttsaistory.app.data.LibraryStoryRow
 import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.data.normalizeOnlineStoryPageUrlForMatch
 import com.ttsaistory.app.data.normalizeWebCategoryUrl
+import com.ttsaistory.app.ui.reader.ReaderService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -38,6 +39,7 @@ object OnlineWebStoryNextPagePrefetch {
         context: Context,
         startStoryId: Long,
         repository: StoryLibraryRepository,
+        readerService: ReaderService? = null,
         onLibraryDataChanged: () -> Unit,
         onPrefetchQueueLines: (List<String>) -> Unit = {},
         onQueueTargetStoryId: (Long?) -> Unit = {},
@@ -47,6 +49,7 @@ object OnlineWebStoryNextPagePrefetch {
                 context = context,
                 startStoryId = startStoryId,
                 repository = repository,
+                readerService = readerService,
                 onLibraryDataChanged = onLibraryDataChanged,
                 onPrefetchQueueLines = onPrefetchQueueLines,
                 onQueueTargetStoryId = onQueueTargetStoryId,
@@ -63,6 +66,7 @@ object OnlineWebStoryNextPagePrefetch {
         context: Context,
         startStoryId: Long,
         repository: StoryLibraryRepository,
+        readerService: ReaderService?,
         onLibraryDataChanged: () -> Unit,
         onPrefetchQueueLines: (List<String>) -> Unit,
         onQueueTargetStoryId: (Long?) -> Unit,
@@ -127,6 +131,7 @@ object OnlineWebStoryNextPagePrefetch {
                         app,
                         existing.id,
                         repository,
+                        readerService,
                     )
                 if (!ok) return
                 lastWebFetchElapsedMs = SystemClock.elapsedRealtime()
@@ -161,6 +166,7 @@ object OnlineWebStoryNextPagePrefetch {
                     app,
                     newId,
                     repository,
+                    readerService,
                 )
             if (!ok) {
                 withContext(Dispatchers.IO) { repository.deleteStory(newId) }
@@ -184,6 +190,7 @@ object OnlineWebStoryNextPagePrefetch {
         context: Context,
         storyId: Long,
         repository: StoryLibraryRepository,
+        readerService: ReaderService?,
     ): Boolean {
         for (attempt in 1..MAX_ATTEMPTS_PER_WEB_FETCH) {
             try {
@@ -192,6 +199,7 @@ object OnlineWebStoryNextPagePrefetch {
                     storyId = storyId,
                     repository = repository,
                     bypassHttpCache = false,
+                    readerService = readerService,
                 )
                 return true
             } catch (e: CancellationException) {

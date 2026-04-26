@@ -70,16 +70,20 @@ suspend fun readPdfTotalPages(pdfFile: File): Int =
 
 suspend fun readPdfSinglePageText(pdfFile: File, pageIndex1: Int): String =
     withContext(Dispatchers.IO) {
-        PDDocument.load(pdfFile).use { doc ->
-            if (doc.isEncrypted) error("PDF có mật khẩu — không hỗ trợ.")
-            if (pageIndex1 !in 1..doc.numberOfPages) return@withContext ""
-            val stripper =
-                PDFTextStripper().apply {
-                    sortByPosition = true
-                    startPage = pageIndex1
-                    endPage = pageIndex1
-                }
-            stripper.getText(doc).trim()
+        try {
+            PDDocument.load(pdfFile).use { doc ->
+                if (doc.isEncrypted) error("PDF có mật khẩu — không hỗ trợ.")
+                if (pageIndex1 !in 1..doc.numberOfPages) return@withContext ""
+                val stripper =
+                    PDFTextStripper().apply {
+                        sortByPosition = true
+                        startPage = pageIndex1
+                        endPage = pageIndex1
+                    }
+                stripper.getText(doc).trim()
+            }
+        } catch (_: OutOfMemoryError) {
+            ""
         }
     }
 
@@ -307,7 +311,7 @@ suspend fun importPdfPagesAsNumberedTxtFiles(
                     PDFTextStripper().apply {
                         sortByPosition = true
                     }
-                val samplePageLimit = 400
+                val samplePageLimit = 10
                 val samplePages = ArrayList<String>(minOf(totalPages, samplePageLimit))
                 val probeUntil = minOf(totalPages, samplePageLimit)
                 for (p in 1..probeUntil) {

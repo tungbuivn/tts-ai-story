@@ -200,7 +200,7 @@ fun MainBottomBar(
                                         steps = 0,
                                     )
                                     Text(
-                                        text = nav.paragraphFocusSliderValue.toString(),
+                                        text = (nav.paragraphFocusSliderValue + 1).toString(),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurface,
                                         modifier =

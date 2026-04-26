@@ -454,6 +454,7 @@ fun AppModalNavigationDrawerScaffold(
         DialogOnlineDomainParsersManage(
             repository = storyLibrary,
             onDismissRequest = { showDrawerOnlineDomainParserManage = false },
+            onParsersMutated = onLibraryDataChanged,
         )
     }
 
