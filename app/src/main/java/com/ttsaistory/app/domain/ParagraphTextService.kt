@@ -82,6 +82,7 @@ object ParagraphTextService {
                 return flat
             }
             val resultFlat = parseStoredTextToSentencesUncached(raw)
+            publishTotalItemCountFromFlat(resultFlat)
             parseStoredTextCacheRaw = raw
             parseStoredTextCacheSentences = resultFlat
             return resultFlat
@@ -96,7 +97,7 @@ object ParagraphTextService {
 
     private fun parseStoredTextToSentencesUncached(raw: String): List<String> {
         val result = ParagraphSentenceSplitting.parseStoredTextToFlatSentences(raw)
-        publishTotalItemCountFromFlat(result)
+        
         return result
     }
 
