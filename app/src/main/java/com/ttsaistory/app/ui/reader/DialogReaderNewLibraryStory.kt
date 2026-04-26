@@ -1,5 +1,8 @@
 package com.ttsaistory.app.ui.reader
 
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,12 +14,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +42,7 @@ internal fun DialogReaderNewLibraryStory(
     onDismissRequest: () -> Unit,
     onConfirmCreateClick: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text("Chương mới") },
@@ -105,6 +114,30 @@ internal fun DialogReaderNewLibraryStory(
                     onValueChange = onNewCategoryNameDraftChange,
                     label = { Text("Hoặc truyện mới (ưu tiên)") },
                     singleLine = true,
+                    trailingIcon = {
+                        IconButton(
+                            onClick = {
+                                val cm =
+                                    ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = cm.primaryClip
+                                if (clip == null || clip.itemCount <= 0) {
+                                    Toast.makeText(ctx, "Clipboard trống", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val pasted = clip.getItemAt(0).coerceToText(ctx).toString()
+                                    if (pasted.isBlank()) {
+                                        Toast.makeText(ctx, "Clipboard trống", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        onNewCategoryNameDraftChange(pasted)
+                                    }
+                                }
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.ContentPaste,
+                                contentDescription = "Dán từ clipboard",
+                            )
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }

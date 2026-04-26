@@ -484,6 +484,7 @@ fun ReaderTab(
     val editorAppearance = rememberReaderTabEditorAppearance(prefs, prefsBridge.fontPrefsEpoch)
     LaunchedEffect(activeLibraryStoryId, librarySyncEpoch, bookmarkResetKey) {
         readerService.paragraphManualFocusFlatIndex = -1
+        readerService.paragraphLocalSelectedFlatIndex = -1
         val sid = activeLibraryStoryId
         if (sid == null || sid <= 0L) {
             dbLastSpeechSentenceIndex0 = -1
@@ -998,6 +999,9 @@ fun ReaderTab(
                 enabled =
                     exportUiFromCoordinator == null &&
                         textEditorChromeViewOnly &&
+                        speakingParagraphIndex < 0 &&
+                        !(speechEngine == TextTabSpeechEngine.System && systemTtsPlaybackActive) &&
+                        !(speechEngine == TextTabSpeechEngine.ElevenLabs && elevenLabsJobActive) &&
                         (paragraphToolbarTtsTotal ?: 0) > 0,
             ),
         )
@@ -1018,6 +1022,21 @@ fun ReaderTab(
     val latestSystemTtsPlaybackActive by rememberUpdatedState(systemTtsPlaybackActive)
     val latestElevenLabsJobActive by rememberUpdatedState(elevenLabsJobActive)
     val latestOnPlayParagraphs by rememberUpdatedState(onPlayParagraphs)
+    var showPlayChoiceMenu by remember { mutableStateOf(false) }
+    var playChoiceParagraphs by remember { mutableStateOf<List<String>>(emptyList()) }
+    var playChoiceResumeIdx by remember { mutableIntStateOf(0) }
+    var playChoiceCursorIdx by remember { mutableIntStateOf(0) }
+
+    fun playFromResolvedStart(paras: List<String>, desiredStart: Int) {
+        val maxP = (paras.size - 1).coerceAtLeast(0)
+        val start = desiredStart.coerceIn(0, maxP)
+        if (!hasSpeakableParagraphFrom(paras, start)) {
+            Toast.makeText(ctx, "Không có đoạn đọc được từ vị trí đã chọn.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        persistLastSpeakingIndexForPlay(start)
+        latestOnPlayParagraphs(paras, start)
+    }
 
     fun scrollParagraphLazyToGlobalFlat(
         globalFlat: Int,
@@ -1901,8 +1920,44 @@ fun ReaderTab(
                         } else {
                             0
                         }
-                    persistLastSpeakingIndexForPlay(resumeIdx)
-                    onPlayParagraphs(paras, resumeIdx)
+                    val localSelectedTtsIdx =
+                        if (readerService.paragraphSplitMode) {
+                            val groups = paragraphGroupFieldValues.map { row -> row.map { it.text } }
+                            val localSelected = readerService.paragraphLocalSelectedFlatIndex
+                            val maxUi = (groups.sumOf { it.size } - 1).coerceAtLeast(0)
+                            if (localSelected in 0..maxUi) {
+                                editorUiFlatToTtsParagraphStartIndex(groups, localSelected).coerceIn(0, maxP)
+                            } else {
+                                null
+                            }
+                        } else {
+                            null
+                        }
+                    val hasLastSpeakingIndex = bookmark >= 0
+                    if (hasLastSpeakingIndex && localSelectedTtsIdx != null) {
+                        if (localSelectedTtsIdx == resumeIdx) {
+                            showPlayChoiceMenu = false
+                            playFromResolvedStart(paras, resumeIdx)
+                        } else {
+                            playChoiceParagraphs = paras
+                            playChoiceResumeIdx = resumeIdx
+                            playChoiceCursorIdx = localSelectedTtsIdx
+                            showPlayChoiceMenu = true
+                        }
+                    } else {
+                        showPlayChoiceMenu = false
+                        playFromResolvedStart(paras, resumeIdx)
+                    }
+                },
+                showPlayChoiceMenu = showPlayChoiceMenu,
+                onDismissPlayChoiceMenu = { showPlayChoiceMenu = false },
+                onPlayContinueChoiceClick = {
+                    showPlayChoiceMenu = false
+                    playFromResolvedStart(playChoiceParagraphs, playChoiceResumeIdx)
+                },
+                onPlayFromCursorChoiceClick = {
+                    showPlayChoiceMenu = false
+                    playFromResolvedStart(playChoiceParagraphs, playChoiceCursorIdx)
                 },
                 playParagraphsEnabled =
                     exportUiFromCoordinator == null &&
@@ -1915,8 +1970,8 @@ fun ReaderTab(
                         !(speechEngine == TextTabSpeechEngine.ElevenLabs && elevenLabsJobActive),
                 onStopSpeechClick = { onStopAllSpeechReading() },
                 stopSpeechEnabled =
-                    (tts != null && ttsReady) ||
-                        elevenLabsJobActive ||
+                    (speechEngine == TextTabSpeechEngine.System && systemTtsPlaybackActive) ||
+                        (speechEngine == TextTabSpeechEngine.ElevenLabs && elevenLabsJobActive) ||
                         speakingParagraphIndex >= 0,
                 showReloadWebContent = activeStoryHasWebUrl,
                 onReloadWebContentClick = {

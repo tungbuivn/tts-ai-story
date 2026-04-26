@@ -837,6 +837,8 @@ fun AppTabs() {
                     )
                 }
             readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
+            // Xong batch hiện tại thì ẩn nhãn; batch sau (nếu có) sẽ set lại khi bắt đầu item mới.
+            readerService.deferredFetchProgressLabel = ""
             if (result.changed) {
                 libraryRefreshTrigger++
             }
@@ -872,6 +874,8 @@ fun AppTabs() {
                     )
                 }
             readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
+            // Xong queue vòng hiện tại thì ẩn nhãn; không giữ trạng thái "đang nạp" khi không còn item đang chạy.
+            readerService.deferredFetchProgressLabel = ""
             if (result.changed) {
                 libraryRefreshTrigger++
             }

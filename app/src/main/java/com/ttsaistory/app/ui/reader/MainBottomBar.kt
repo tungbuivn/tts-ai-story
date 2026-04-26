@@ -125,6 +125,10 @@ fun MainBottomBar(
             tonalElevation = 2.dp,
         ) {
             fun withWebQueueStoryIdSuffix(base: String): String {
+                val deferredProgress = readerService.deferredFetchProgressLabel.trim()
+                if (tabIndex == 0 && deferredProgress.isNotEmpty()) {
+                    return "$base ($deferredProgress)"
+                }
                 if (tabIndex != 0) return base
                 val bridge = readerBottomNavBridge
                 val q = bridge?.webStoryQueueTargetStoryId
@@ -292,8 +296,7 @@ fun MainBottomBar(
                         }
                     }
                     val prefetchLines = nav?.webPrefetchChapterQueueLines.orEmpty()
-                    val deferredProgress = readerService.deferredFetchProgressLabel.trim()
-                    if (prefetchLines.isNotEmpty() || deferredProgress.isNotEmpty()) {
+                    if (prefetchLines.isNotEmpty()) {
                         Column(
                             modifier =
                                 Modifier
@@ -301,14 +304,6 @@ fun MainBottomBar(
                                     .heightIn(max = 96.dp)
                                     .padding(horizontal = 12.dp, vertical = 4.dp),
                         ) {
-                            if (deferredProgress.isNotEmpty()) {
-                                Text(
-                                    text = "Đang nạp: $deferredProgress",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.tertiary,
-                                    maxLines = 1,
-                                )
-                            }
                             prefetchLines.take(5).forEach { line ->
                                 Text(
                                     text = line,

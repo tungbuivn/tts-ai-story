@@ -22,6 +22,9 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +41,10 @@ internal fun ReaderToolbarActionsColumn(
     textEditorChromeViewOnly: Boolean,
     onToggleEditorChromeViewOnly: () -> Unit,
     onPlayParagraphsClick: () -> Unit,
+    showPlayChoiceMenu: Boolean,
+    onDismissPlayChoiceMenu: () -> Unit,
+    onPlayContinueChoiceClick: () -> Unit,
+    onPlayFromCursorChoiceClick: () -> Unit,
     playParagraphsEnabled: Boolean,
     onStopSpeechClick: () -> Unit,
     stopSpeechEnabled: Boolean,
@@ -88,6 +95,19 @@ internal fun ReaderToolbarActionsColumn(
                 Icon(
                     imageVector = Icons.Filled.PlayCircle,
                     contentDescription = "Phát từ bookmark hoặc từ câu đầu",
+                )
+            }
+            DropdownMenu(
+                expanded = showPlayChoiceMenu,
+                onDismissRequest = onDismissPlayChoiceMenu,
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Tiếp tục play") },
+                    onClick = onPlayContinueChoiceClick,
+                )
+                DropdownMenuItem(
+                    text = { Text("Play tại vị trí con trỏ") },
+                    onClick = onPlayFromCursorChoiceClick,
                 )
             }
             IconButton(
