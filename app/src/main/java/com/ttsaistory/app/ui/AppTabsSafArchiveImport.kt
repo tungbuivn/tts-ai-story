@@ -12,8 +12,7 @@ import com.ttsaistory.app.domain.deferredZipEntryOnlineUrl
 import com.ttsaistory.app.domain.listZipTextEntryNames
 import com.ttsaistory.app.domain.readEpubChapterCount
 import com.ttsaistory.app.domain.readEpubChapterPlainText
-import com.ttsaistory.app.domain.readPdfSinglePageText
-import com.ttsaistory.app.domain.readPdfTotalPages
+import com.ttsaistory.app.ui.reader.ReaderService
 import com.ttsaistory.app.domain.readZipTextEntryByIndex
 import com.ttsaistory.app.domain.safeCategoryNameFromEpubDisplayName
 import com.ttsaistory.app.domain.safeCategoryNameFromPdfDisplayName
@@ -177,6 +176,7 @@ internal suspend fun importOpenedEpubArchiveFromSaf(
 internal suspend fun importOpenedPdfArchiveFromSaf(
     activity: Activity,
     storyLibrary: StoryLibraryRepository,
+    readerService: ReaderService,
     pickedUri: Uri,
     resolvedDisplayName: String?,
     logBridge: OpenFileProgressLogBridge,
@@ -199,11 +199,11 @@ internal suspend fun importOpenedPdfArchiveFromSaf(
             val sourcePdf = File(extractRoot, "_source.pdf")
             logBridge.postUpdate { it?.copy(message = "Đang sao chép nguồn PDF…") }
             copyPdfUriToLocalFile(activity, pickedUri, sourcePdf)
-            val totalPages = readPdfTotalPages(sourcePdf)
+            val totalPages = readerService.readPdfTotalPages(sourcePdf)
             val preloadPages = minOf(1, totalPages)
             for (p in 1..preloadPages) {
                 logBridge.postUpdate { it?.copy(message = "Đang trích trang $p / $preloadPages…") }
-                val pageBody = readPdfSinglePageText(sourcePdf, p).trim()
+                val pageBody = readerService.readPdfSinglePageText(sourcePdf, p).trim()
                 storyLibrary.insertStory(
                     categoryId = categoryId,
                     title = String.format("%08d", p),

@@ -2,6 +2,8 @@ package com.ttsaistory.app.ui.reader
 
 import android.content.SharedPreferences
 import androidx.compose.runtime.Stable
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -15,10 +17,16 @@ import com.ttsaistory.app.data.normalizedOnlineParserDomainKey
 import com.ttsaistory.app.domain.ParagraphTextService
 import com.ttsaistory.app.domain.sanitizeParagraphText
 import com.ttsaistory.app.model.AppPreferenceKeys
+import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Trạng thái đọc/ghi sống **ngoài** [ReaderTab] (giữ trong [remember] ở [com.ttsaistory.app.ui.AppTabs])
@@ -117,6 +125,82 @@ class ReaderService(prefs: SharedPreferences) {
      * Khóa: [normalizedOnlineParserDomainKey] (host thường, không `www.`).
      */
     private var onlineDomainParsersByKey: Map<String, OnlineDomainParserRow> by mutableStateOf(emptyMap())
+
+    /**
+     * PDF đang mở (lazy deferred / prefetch): giữ [PDDocument] theo đường dẫn tuyệt đối để
+     * các lần đọc trang sau chỉ strip text, không load lại file từ đĩa.
+     */
+    private val pdfPageTextMutex = Mutex()
+    private var cachedPdfAbsolutePath: String? = null
+    private var cachedPdfDocument: PDDocument? = null
+
+    private fun closeCachedPdfLocked() {
+        runCatching { cachedPdfDocument?.close() }
+        cachedPdfDocument = null
+        cachedPdfAbsolutePath = null
+    }
+
+    private fun ensureCachedPdfOpenLocked(pdfFile: File) {
+        val key = pdfFile.canonicalFile.absolutePath
+        if (cachedPdfAbsolutePath == key && cachedPdfDocument != null) return
+        closeCachedPdfLocked()
+        val doc = PDDocument.load(pdfFile)
+        if (doc.isEncrypted) {
+            doc.close()
+            error("PDF có mật khẩu — không hỗ trợ.")
+        }
+        cachedPdfDocument = doc
+        cachedPdfAbsolutePath = key
+    }
+
+    /**
+     * Tổng số trang — dùng chung cache [PDDocument] với [readPdfSinglePageText]
+     * (vd. đếm trang rồi đọc trang đầu không mở file hai lần).
+     */
+    suspend fun readPdfTotalPages(pdfFile: File): Int =
+        withContext(Dispatchers.IO) {
+            pdfPageTextMutex.withLock {
+                try {
+                    ensureCachedPdfOpenLocked(pdfFile)
+                    val doc = cachedPdfDocument ?: error("Không mở được PDF.")
+                    val total = doc.numberOfPages
+                    if (total <= 0) error("PDF không có trang.")
+                    total
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (oom: OutOfMemoryError) {
+                    closeCachedPdfLocked()
+                    throw oom
+                }
+            }
+        }
+
+    /**
+     * Trích một trang (1-based). Mở/ghi đệm [PDDocument] trong service — cùng file PDF
+     * thì các lần gọi tiếp theo tái sử dụng bản đã load.
+     */
+    suspend fun readPdfSinglePageText(pdfFile: File, pageIndex1: Int): String =
+        withContext(Dispatchers.IO) {
+            pdfPageTextMutex.withLock {
+                try {
+                    ensureCachedPdfOpenLocked(pdfFile)
+                    val doc = cachedPdfDocument ?: return@withLock ""
+                    if (pageIndex1 !in 1..doc.numberOfPages) return@withLock ""
+                    val stripper =
+                        PDFTextStripper().apply {
+                            sortByPosition = true
+                            startPage = pageIndex1
+                            endPage = pageIndex1
+                        }
+                    stripper.getText(doc).trim()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: OutOfMemoryError) {
+                    closeCachedPdfLocked()
+                    ""
+                }
+            }
+        }
 
     fun replaceOnlineDomainParsersCache(rows: List<OnlineDomainParserRow>) {
         onlineDomainParsersByKey =

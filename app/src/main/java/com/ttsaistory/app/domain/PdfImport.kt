@@ -58,35 +58,6 @@ suspend fun copyPdfUriToLocalFile(
     }
 }
 
-suspend fun readPdfTotalPages(pdfFile: File): Int =
-    withContext(Dispatchers.IO) {
-        PDDocument.load(pdfFile).use { doc ->
-            if (doc.isEncrypted) error("PDF có mật khẩu — không hỗ trợ.")
-            val total = doc.numberOfPages
-            if (total <= 0) error("PDF không có trang.")
-            total
-        }
-    }
-
-suspend fun readPdfSinglePageText(pdfFile: File, pageIndex1: Int): String =
-    withContext(Dispatchers.IO) {
-        try {
-            PDDocument.load(pdfFile).use { doc ->
-                if (doc.isEncrypted) error("PDF có mật khẩu — không hỗ trợ.")
-                if (pageIndex1 !in 1..doc.numberOfPages) return@withContext ""
-                val stripper =
-                    PDFTextStripper().apply {
-                        sortByPosition = true
-                        startPage = pageIndex1
-                        endPage = pageIndex1
-                    }
-                stripper.getText(doc).trim()
-            }
-        } catch (_: OutOfMemoryError) {
-            ""
-        }
-    }
-
 private fun normalizePdfLineKey(s: String): String =
     s.trim().replace(Regex("\\s+"), " ").lowercase(Locale.ROOT)
 

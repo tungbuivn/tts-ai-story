@@ -934,6 +934,7 @@ fun ReaderTab(
         withContext(Dispatchers.Default) {
             readerService.setChapterText(joinedForChapter)
         }
+        readerService.setLibraryChapterLoadUiActive(false)
         val cellCount = paragraphGroupFieldValues.sumOf { it.size }
         val t0 =
             AnrDiagLog.begin(
@@ -1677,6 +1678,9 @@ fun ReaderTab(
                 readerService.setChapterText(snapshot)
                 paragraphsForEditor(snapshot)
             }
+        if (!readerService.paragraphSplitMode) {
+            readerService.setLibraryChapterLoadUiActive(false)
+        }
         if (snapshot == text) {
             segments = computed
             AnrDiagLog.end("ReaderTab paragraphsForEditor segs=${computed.size}", t0)
@@ -1706,6 +1710,7 @@ fun ReaderTab(
                 readerService.setChapterText(snapshot)
                 paragraphMainGroupsForEditor(readerService.chapterParagraphs.value)
             }
+        readerService.setLibraryChapterLoadUiActive(false)
         if (snapshot != latestParentText || !readerService.paragraphSplitMode) {
             AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor libSync CANCELLED", t0)
             toolbarTtsSplitWorking = false
@@ -1776,52 +1781,11 @@ fun ReaderTab(
         }
     }
 
-    /**
-     * Mở chương từ thư viện / chuyển chương / bump [librarySyncEpoch]: hiển thị dialog cho tới khi
-     * luồng chia câu TTS xong (lưới câu: [toolbarTtsSplitWorking]; toàn văn: debounce + idle).
-     */
-    LaunchedEffect(librarySyncEpoch, activeLibraryStoryId) {
+    /** Không còn chương thư viện đang mở: tắt overlay «Đang tải chương». */
+    LaunchedEffect(activeLibraryStoryId) {
         val sid = activeLibraryStoryId
-        if (librarySyncEpoch <= 0 || sid == null || sid <= 0L) {
+        if (sid == null || sid <= 0L) {
             readerService.setLibraryChapterLoadUiActive(false)
-            return@LaunchedEffect
-        }
-        val epochAtStart = librarySyncEpoch
-        readerService.setLibraryChapterLoadUiActive(true)
-        delay(1)
-        fun stillSameOpen(): Boolean =
-            activeLibraryStoryId == sid && librarySyncEpoch == epochAtStart
-        var finishedClean = false
-        try {
-            if (!stillSameOpen()) return@LaunchedEffect
-            if (latestParagraphSplit) {
-                withTimeoutOrNull(800L) {
-                    snapshotFlow { toolbarTtsSplitWorking }.first { it }
-                }
-                if (!stillSameOpen()) return@LaunchedEffect
-                withTimeoutOrNull(180_000L) {
-                    snapshotFlow { toolbarTtsSplitWorking }.first { !it }
-                }
-                if (!stillSameOpen()) return@LaunchedEffect
-                delay(AppEditorConstants.PLAY_TOOLBAR_SPLIT_DEBOUNCE_MS + 120L)
-                if (!stillSameOpen()) return@LaunchedEffect
-                withTimeoutOrNull(180_000L) {
-                    snapshotFlow { toolbarTtsSplitWorking }.first { !it }
-                }
-            } else {
-                delay(AppEditorConstants.PLAY_TOOLBAR_SPLIT_DEBOUNCE_MS + 40L)
-                if (!stillSameOpen()) return@LaunchedEffect
-                withTimeoutOrNull(180_000L) {
-                    snapshotFlow { toolbarTtsSplitWorking }.first { !it }
-                }
-            }
-            finishedClean = true
-        } catch (e: CancellationException) {
-            throw e
-        } finally {
-            if (finishedClean && activeLibraryStoryId == sid && librarySyncEpoch == epochAtStart) {
-                readerService.setLibraryChapterLoadUiActive(false)
-            }
         }
     }
 
@@ -1852,6 +1816,7 @@ fun ReaderTab(
                 readerService.setChapterText(snapshot)
                 paragraphMainGroupsForEditor(readerService.chapterParagraphs.value)
             }
+        readerService.setLibraryChapterLoadUiActive(false)
         if (snapshot != latestParentText || !readerService.paragraphSplitMode) {
             AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor(splitMode+text) CANCELLED", tParse)
             return@LaunchedEffect
@@ -2132,6 +2097,7 @@ fun ReaderTab(
                     val sid = activeLibraryStoryId ?: return@ReaderToolbarActionsColumn
                     if (readerService.paragraphSplitMode) flushParagraphParentPersist()
                     scope.launch {
+                        readerService.setLibraryChapterLoadUiActive(true)
                         webContentReloadWorking = true
                         try {
                             val row =
@@ -2139,6 +2105,7 @@ fun ReaderTab(
                                     libraryRepository.getStory(sid)
                                 }
                             if (row == null) {
+                                readerService.setLibraryChapterLoadUiActive(false)
                                 Toast.makeText(
                                     ctx,
                                     "Không tìm thấy chương trong thư viện.",
@@ -2157,6 +2124,7 @@ fun ReaderTab(
                                     ok = again?.onlineContentParseOk == true
                                 }
                                 if (!ok) {
+                                    readerService.setLibraryChapterLoadUiActive(false)
                                     Toast.makeText(
                                         ctx,
                                         "Không tải lại được nội dung từ PDF/ZIP/EPUB.",
@@ -2178,6 +2146,7 @@ fun ReaderTab(
                                     libraryRepository.readStoryText(sid)
                                 }
                             if (body == null) {
+                                readerService.setLibraryChapterLoadUiActive(false)
                                 Toast.makeText(
                                     ctx,
                                     "Không đọc được nội dung sau khi tải.",
@@ -2201,6 +2170,7 @@ fun ReaderTab(
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
+                            readerService.setLibraryChapterLoadUiActive(false)
                             Toast.makeText(
                                 ctx,
                                 e.message ?: "Không tải lại được từ web",
@@ -2903,6 +2873,19 @@ fun ReaderTab(
             scope.launch {
                 val cid = libraryStoryPickerCategoryId ?: return@launch
                 try {
+                    val viewingId = activeLibraryStoryId
+                    if (viewingId == storyId && readerService.paragraphSplitMode) {
+                        flushParagraphParentPersist()
+                    }
+                    val openIdAfterDelete: Long? =
+                        if (viewingId == storyId) {
+                            withContext(Dispatchers.IO) {
+                                libraryRepository.previousStoryInCategoryBefore(storyId)?.id
+                                    ?: libraryRepository.nextStoryInCategoryAfter(storyId)?.id
+                            }
+                        } else {
+                            null
+                        }
                     withContext(Dispatchers.IO) {
                         libraryRepository.deleteStory(storyId)
                     }
@@ -2910,6 +2893,20 @@ fun ReaderTab(
                         withContext(Dispatchers.IO) {
                             libraryRepository.listStories(cid)
                         }
+                    if (openIdAfterDelete != null) {
+                        libraryStoryPickerOpen = false
+                        libraryStoryPickerCategoryId = null
+                        readerService.setLibraryChapterLoadUiActive(true)
+                        val opened = onOpenLibraryStory(openIdAfterDelete)
+                        if (!opened) {
+                            readerService.setLibraryChapterLoadUiActive(false)
+                            Toast.makeText(
+                                ctx,
+                                "Không mở được chương thay thế sau khi xóa.",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
                     onLibraryDataChanged()
                 } catch (e: Exception) {
                     Toast.makeText(

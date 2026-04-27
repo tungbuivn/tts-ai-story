@@ -68,10 +68,10 @@ import com.ttsaistory.app.domain.deferredArchiveLazyItemIndex1
 import com.ttsaistory.app.domain.deferredEpubChapterOnlineUrl
 import com.ttsaistory.app.domain.deferredArchiveSourceKeyFromLazyOnlineUrl
 import com.ttsaistory.app.domain.deferredImportFrontierIndex1
+import com.ttsaistory.app.domain.deferredImportMaxParsedIndex1FromRows
 import com.ttsaistory.app.domain.deferredPdfPageOnlineUrl
 import com.ttsaistory.app.domain.deferredZipEntryOnlineUrl
 import com.ttsaistory.app.domain.readEpubChapterPlainText
-import com.ttsaistory.app.domain.readPdfSinglePageText
 import com.ttsaistory.app.domain.readZipTextEntryByIndex
 import com.ttsaistory.app.domain.wordCountForTtsPlaybackWpm
 import com.ttsaistory.app.domain.persistInboundSharedTextToLibrary
@@ -183,11 +183,12 @@ private suspend fun openLibraryStoryByIdForMainTabs(
         readerService.setLibraryChapterLoadUiActive(false)
         return false
     }
-    setActiveLibraryStoryId(storyId)
+    // [setActiveLibraryStoryId] gán sau khi có body — cùng nhịp với [setText] + bump epoch (tránh id mới / text cũ).
     val deferredMaterialized =
         withContext(Dispatchers.IO) {
             materializeDeferredStoryIfNeeded(
                 storyLibrary,
+                readerService,
                 storyId,
                 allowBackwardDeferredFill = false,
             )
@@ -221,11 +222,11 @@ private suspend fun openLibraryStoryByIdForMainTabs(
             "Không đọc được file chương.",
             Toast.LENGTH_LONG,
         ).show()
-        setActiveLibraryStoryId(previousActiveLibraryStoryId)
         readerService.setLibraryChapterLoadUiActive(false)
         return false
     }
     val cleaned = canonicalTextFromRaw(body)
+    setActiveLibraryStoryId(storyId)
     setText(cleaned)
     prefs.saveLastText(cleaned)
     bumpLibrarySyncEpoch()
@@ -242,6 +243,7 @@ private suspend fun openLibraryStoryByIdForMainTabs(
 
 private suspend fun materializeDeferredStoryIfNeeded(
     storyLibrary: StoryLibraryRepository,
+    readerService: ReaderService,
     storyId: Long,
     allowBackwardDeferredFill: Boolean = false,
 ): Boolean =
@@ -263,7 +265,7 @@ private suspend fun materializeDeferredStoryIfNeeded(
         if (pdfSpec != null) {
             val body =
                 try {
-                    readPdfSinglePageText(File(pdfSpec.sourcePdfPath), pdfSpec.pageIndex1).trim()
+                    readerService.readPdfSinglePageText(File(pdfSpec.sourcePdfPath), pdfSpec.pageIndex1).trim()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: OutOfMemoryError) {
@@ -437,19 +439,53 @@ private fun buildDeferredOnlineUrl(
     }
 
 private suspend fun readDeferredItemText(
+    readerService: ReaderService,
     source: DeferredImportSource,
     index1: Int,
 ): String =
     when (source.kind) {
-        DeferredImportKind.PDF -> readPdfSinglePageText(File(source.sourcePath), index1)
+        DeferredImportKind.PDF -> readerService.readPdfSinglePageText(File(source.sourcePath), index1)
         DeferredImportKind.ZIP -> readZipTextEntryByIndex(File(source.sourcePath), index1)
         DeferredImportKind.EPUB -> readEpubChapterPlainText(File(source.sourcePath), index1)
     }
 
+/** Prefetch nền tối đa đến chỉ số `currentIndex1 + delta` (mỗi lần chỉ «lấy thêm» trong cửa sổ này). */
+private const val DEFERRED_ARCHIVE_PREFETCH_DELTA = 10
+
+private fun computeDeferredArchivePrefetchHasRemaining(
+    storyLibrary: StoryLibraryRepository,
+    categoryId: Long,
+    deferredSourceKey: String,
+    totalItems: Int,
+    currentIndex1: Int,
+    allowBackwardDeferredFill: Boolean,
+): Boolean {
+    val rowsFinal = storyLibrary.listStories(categoryId)
+    val markMaxAfter =
+        storyLibrary.maxDeferredArchiveProcessedIndex1(categoryId, deferredSourceKey)
+    val frontierAfter = deferredImportFrontierIndex1(rowsFinal, totalItems, markMaxAfter)
+    val rowsByTitle = rowsFinal.associateBy { it.title.trim() }
+    val hasRemainingLow =
+        if (allowBackwardDeferredFill) {
+            currentIndex1
+        } else {
+            frontierAfter
+        }
+    return hasRemainingLow <= totalItems &&
+        (hasRemainingLow..totalItems).any { idx ->
+            if (storyLibrary.isDeferredArchiveItemProcessed(categoryId, deferredSourceKey, idx)) {
+                return@any false
+            }
+            val title = String.format(Locale.US, "%08d", idx)
+            val row = rowsByTitle[title]
+            row == null || !row.onlineContentParseOk
+        }
+}
+
 private suspend fun ensureDeferredPrefetchWindowFromCurrentStory(
     storyLibrary: StoryLibraryRepository,
+    readerService: ReaderService,
     currentStoryId: Long,
-    minItemsFromCurrent: Int = 10,
     startFromFirstPending: Boolean = false,
     allowBackwardDeferredFill: Boolean = false,
     onProcessingItem: ((DeferredImportSource, Int) -> Unit)? = null,
@@ -477,34 +513,98 @@ private suspend fun ensureDeferredPrefetchWindowFromCurrentStory(
             } else {
                 maxOf(currentIndex1, frontierIndex1)
             }
-        val firstPendingFromScan =
-            if (scanLow1 <= source.totalItems) {
-                (scanLow1..source.totalItems).firstOrNull { idx ->
-                    if (storyLibrary.isDeferredArchiveItemProcessed(current.categoryId, deferredSourceKey, idx)) {
-                        return@firstOrNull false
-                    }
-                    val title = String.format(Locale.US, "%08d", idx)
-                    val row = existingByTitle[title]
-                    row == null || !row.onlineContentParseOk
+
+        fun firstPendingInRange(rangeStart: Int, rangeEnd: Int): Int? {
+            if (rangeStart > rangeEnd) return null
+            return (rangeStart..rangeEnd).firstOrNull { idx ->
+                if (storyLibrary.isDeferredArchiveItemProcessed(current.categoryId, deferredSourceKey, idx)) {
+                    return@firstOrNull false
                 }
-            } else {
-                null
+                val title = String.format(Locale.US, "%08d", idx)
+                val row = existingByTitle[title]
+                row == null || !row.onlineContentParseOk
             }
-        if (startFromFirstPending && firstPendingFromScan == null) {
-            return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = false, hasSource = true, hasRemaining = false)
         }
-        val startIndex1 =
-            if (startFromFirstPending) {
-                firstPendingFromScan!!
-            } else {
-                scanLow1
+
+        val windowEnd1: Int
+        val startIndex1: Int
+        if (startFromFirstPending) {
+            // Continue fetch: cửa sổ neo theo mục pending đầu tiên (không neo theo chương đang mở) để lặp batch đến hết nguồn.
+            val fp = firstPendingInRange(scanLow1, source.totalItems)
+            if (fp == null) {
+                return@withDeferredArchiveWriteLock DeferredPrefetchResult(
+                    changed = false,
+                    hasSource = true,
+                    hasRemaining =
+                        computeDeferredArchivePrefetchHasRemaining(
+                            storyLibrary = storyLibrary,
+                            categoryId = current.categoryId,
+                            deferredSourceKey = deferredSourceKey,
+                            totalItems = source.totalItems,
+                            currentIndex1 = currentIndex1,
+                            allowBackwardDeferredFill = allowBackwardDeferredFill,
+                        ),
+                )
             }
+            windowEnd1 = minOf(source.totalItems, fp + DEFERRED_ARCHIVE_PREFETCH_DELTA)
+            startIndex1 = fp
+        } else {
+            windowEnd1 = minOf(source.totalItems, currentIndex1 + DEFERRED_ARCHIVE_PREFETCH_DELTA)
+            startIndex1 = scanLow1
+        }
+
+        val maxParsedFromRows =
+            deferredImportMaxParsedIndex1FromRows(rows, source.totalItems)
+        val highWaterFetched = maxOf(maxParsedFromRows, deferredMarkMax)
+        if (highWaterFetched >= windowEnd1) {
+            return@withDeferredArchiveWriteLock DeferredPrefetchResult(
+                changed = false,
+                hasSource = true,
+                hasRemaining =
+                    computeDeferredArchivePrefetchHasRemaining(
+                        storyLibrary = storyLibrary,
+                        categoryId = current.categoryId,
+                        deferredSourceKey = deferredSourceKey,
+                        totalItems = source.totalItems,
+                        currentIndex1 = currentIndex1,
+                        allowBackwardDeferredFill = allowBackwardDeferredFill,
+                    ),
+            )
+        }
+
         if (startIndex1 > source.totalItems) {
             return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = false, hasSource = true, hasRemaining = false)
         }
-        val endIndex1 = minOf(source.totalItems, startIndex1 + minItemsFromCurrent - 1)
+        if (startIndex1 > windowEnd1) {
+            return@withDeferredArchiveWriteLock DeferredPrefetchResult(
+                changed = false,
+                hasSource = true,
+                hasRemaining =
+                    computeDeferredArchivePrefetchHasRemaining(
+                        storyLibrary = storyLibrary,
+                        categoryId = current.categoryId,
+                        deferredSourceKey = deferredSourceKey,
+                        totalItems = source.totalItems,
+                        currentIndex1 = currentIndex1,
+                        allowBackwardDeferredFill = allowBackwardDeferredFill,
+                    ),
+            )
+        }
+        val endIndex1 = windowEnd1
         if (endIndex1 < startIndex1) {
-            return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = false, hasSource = true, hasRemaining = false)
+            return@withDeferredArchiveWriteLock DeferredPrefetchResult(
+                changed = false,
+                hasSource = true,
+                hasRemaining =
+                    computeDeferredArchivePrefetchHasRemaining(
+                        storyLibrary = storyLibrary,
+                        categoryId = current.categoryId,
+                        deferredSourceKey = deferredSourceKey,
+                        totalItems = source.totalItems,
+                        currentIndex1 = currentIndex1,
+                        allowBackwardDeferredFill = allowBackwardDeferredFill,
+                    ),
+            )
         }
         var changed = false
         coroutineScope {
@@ -566,7 +666,7 @@ private suspend fun ensureDeferredPrefetchWindowFromCurrentStory(
                         }
                         if (row == null || row.onlineContentParseOk) continue
                         try {
-                            val body = readDeferredItemText(source, idx).trim()
+                            val body = readDeferredItemText(readerService, source, idx).trim()
                             if (body.isNotEmpty()) {
                                 storyLibrary.updateStoryText(row.id, canonicalTextFromRaw(body))
                             }
@@ -595,28 +695,15 @@ private suspend fun ensureDeferredPrefetchWindowFromCurrentStory(
             producer.join()
             consumer.join()
         }
-        val rowsAfter = storyLibrary.listStories(current.categoryId).associateBy { it.title.trim() }
-        val rowsFinal = storyLibrary.listStories(current.categoryId)
-        val markMaxAfter =
-            storyLibrary.maxDeferredArchiveProcessedIndex1(current.categoryId, deferredSourceKey)
-        val frontierAfter =
-            deferredImportFrontierIndex1(rowsFinal, source.totalItems, markMaxAfter)
-        val hasRemainingLow =
-            if (allowBackwardDeferredFill) {
-                currentIndex1
-            } else {
-                frontierAfter
-            }
         val hasRemaining =
-            hasRemainingLow <= source.totalItems &&
-                (hasRemainingLow..source.totalItems).any { idx ->
-                    if (storyLibrary.isDeferredArchiveItemProcessed(current.categoryId, deferredSourceKey, idx)) {
-                        return@any false
-                    }
-                    val title = String.format(Locale.US, "%08d", idx)
-                    val row = rowsAfter[title]
-                    row == null || !row.onlineContentParseOk
-                }
+            computeDeferredArchivePrefetchHasRemaining(
+                storyLibrary = storyLibrary,
+                categoryId = current.categoryId,
+                deferredSourceKey = deferredSourceKey,
+                totalItems = source.totalItems,
+                currentIndex1 = currentIndex1,
+                allowBackwardDeferredFill = allowBackwardDeferredFill,
+            )
         return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = changed, hasSource = true, hasRemaining = hasRemaining)
     }
 
@@ -789,6 +876,7 @@ fun AppTabs() {
                             importOpenedPdfArchiveFromSaf(
                                 activity,
                                 storyLibrary,
+                                readerService,
                                 stagedUri,
                                 displayName,
                                 safArchiveImportLogBridge,
@@ -970,29 +1058,26 @@ fun AppTabs() {
             readerService.deferredFetchProgressLabel = ""
             return@LaunchedEffect
         }
-        do {
-            readerService.deferredFetchWorking = true
-            val result =
-                withContext(Dispatchers.IO) {
-                    ensureDeferredPrefetchWindowFromCurrentStory(
-                        storyLibrary = storyLibrary,
-                        currentStoryId = sid,
-                        minItemsFromCurrent = 10,
-                        startFromFirstPending = false,
-                        onProcessingItem = { source, idx ->
-                            readerService.deferredFetchProgressLabel =
-                                "${deferredKindDisplayName(source.kind)} $idx / ${source.totalItems}"
-                        },
-                    )
-                }
-            readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
-            // Xong batch hiện tại thì ẩn nhãn; batch sau (nếu có) sẽ set lại khi bắt đầu item mới.
-            readerService.deferredFetchProgressLabel = ""
-            if (result.changed) {
-                libraryRefreshTrigger++
+        readerService.deferredFetchWorking = true
+        val result =
+            withContext(Dispatchers.IO) {
+                ensureDeferredPrefetchWindowFromCurrentStory(
+                    storyLibrary = storyLibrary,
+                    readerService = readerService,
+                    currentStoryId = sid,
+                    startFromFirstPending = false,
+                    onProcessingItem = { source, idx ->
+                        readerService.deferredFetchProgressLabel =
+                            "${deferredKindDisplayName(source.kind)} $idx / ${source.totalItems}"
+                    },
+                )
             }
-            break
-        } while (true)
+        readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
+        // Xong batch hiện tại thì ẩn nhãn; «continue fetch» lo các batch tiếp theo.
+        readerService.deferredFetchProgressLabel = ""
+        if (result.changed) {
+            libraryRefreshTrigger++
+        }
         readerService.deferredFetchWorking = false
         if (!readerService.deferredFetchHasRemaining) {
             readerService.deferredFetchProgressLabel = ""
@@ -1013,8 +1098,8 @@ fun AppTabs() {
                 withContext(Dispatchers.IO) {
                     ensureDeferredPrefetchWindowFromCurrentStory(
                         storyLibrary = storyLibrary,
+                        readerService = readerService,
                         currentStoryId = sid,
-                        minItemsFromCurrent = 10,
                         startFromFirstPending = true,
                         onProcessingItem = { source, idx ->
                             readerService.deferredFetchProgressLabel =
@@ -1029,8 +1114,10 @@ fun AppTabs() {
                 libraryRefreshTrigger++
             }
             if (!readerService.deferredFetchHasRemaining) {
+                readerService.deferredFetchContinueEnabled = false
                 break
             }
+            yield()
             delay(120)
         }
         readerService.deferredFetchWorking = false
@@ -1049,8 +1136,8 @@ fun AppTabs() {
             withContext(Dispatchers.IO) {
                 ensureDeferredPrefetchWindowFromCurrentStory(
                     storyLibrary = storyLibrary,
+                    readerService = readerService,
                     currentStoryId = sid,
-                    minItemsFromCurrent = 1,
                 )
             }
         readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
@@ -1251,6 +1338,7 @@ fun AppTabs() {
                         importOpenedPdfArchiveFromSaf(
                             activity,
                             storyLibrary,
+                            readerService,
                             streamUri,
                             sendDisplayName,
                             safArchiveImportLogBridge,
@@ -1340,6 +1428,7 @@ fun AppTabs() {
                         importOpenedPdfArchiveFromSaf(
                             activity,
                             storyLibrary,
+                            readerService,
                             stagedViewPdf,
                             viewDisplayName,
                             safArchiveImportLogBridge,
@@ -2238,6 +2327,7 @@ fun AppTabs() {
                     withContext(Dispatchers.IO) {
                         materializeDeferredStoryIfNeeded(
                             storyLibrary,
+                            readerService,
                             storyId,
                             allowBackwardDeferredFill = true,
                         )
