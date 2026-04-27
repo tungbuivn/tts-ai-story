@@ -2,6 +2,7 @@ package com.ttsaistory.app.ui.reader
 
 import android.content.SharedPreferences
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -29,6 +30,23 @@ import kotlinx.coroutines.flow.asStateFlow
 class ReaderService(prefs: SharedPreferences) {
     /** Lưới câu (theo ô) hay toàn văn. */
     var paragraphSplitMode: Boolean by mutableStateOf(true)
+
+    private val libraryChapterLoadUiActiveState = mutableStateOf(false)
+
+    /**
+     * Trạng thái dialog «Đang tải chương» (vẽ ở [com.ttsaistory.app.ui.AppModalNavigationDrawerScaffold], không phụ thuộc tab).
+     * Chỉ nên đổi qua [setLibraryChapterLoadUiActive] để áp dụng snapshot ngay.
+     */
+    val libraryChapterLoadUiActive: Boolean
+        get() = libraryChapterLoadUiActiveState.value
+
+    /**
+     * Bật/tắt UI tải chương và gọi [androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications] ngay sau khi gán.
+     */
+    fun setLibraryChapterLoadUiActive(active: Boolean) {
+        libraryChapterLoadUiActiveState.value = active
+        Snapshot.sendApplyNotifications()
+    }
 
     /** Trang lưới câu (chia trang). */
     var paragraphSplitPageIndex: Int by mutableIntStateOf(0)
@@ -62,6 +80,10 @@ class ReaderService(prefs: SharedPreferences) {
      */
     private val _totalItemCount = MutableStateFlow<Int?>(null)
     val totalItemCount: StateFlow<Int?> = _totalItemCount.asStateFlow()
+
+    /** Tổng số dòng (theo `\n` trong chuỗi chuẩn hoá LF) — cập nhật cùng [setChapterText]. */
+    private val _chapterLineCount = MutableStateFlow(0)
+    val chapterLineCount: StateFlow<Int> = _chapterLineCount.asStateFlow()
 
     private val _chapterText = MutableStateFlow("")
     val chapterText: StateFlow<String> = _chapterText.asStateFlow()
@@ -116,7 +138,7 @@ class ReaderService(prefs: SharedPreferences) {
     }
 
     /**
-     * Parse [text] -> [chapterParagraphs]/[chapterText] và cập nhật [totalItemCount].
+     * Parse [text] -> [chapterParagraphs]/[chapterText] và cập nhật [totalItemCount], [chapterLineCount].
      * Nếu có chapter thư viện thì chuẩn hóa lại file khi canonical khác raw.
      */
     fun setChapterText(
@@ -125,6 +147,12 @@ class ReaderService(prefs: SharedPreferences) {
         libraryRepository: StoryLibraryRepository? = null,
     ) {
         val textNorm = text.replace("\r\n", "\n").replace('\r', '\n')
+        _chapterLineCount.value =
+            if (textNorm.isEmpty()) {
+                0
+            } else {
+                textNorm.split("\n").size
+            }
         val flat = ParagraphTextService.parseStoredTextToSentences(textNorm)
         val canonical = flat.joinToString("\n")
         _chapterParagraphs.value = flat

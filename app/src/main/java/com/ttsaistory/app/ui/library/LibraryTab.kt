@@ -56,6 +56,10 @@ fun LibraryTab(
     onToolbarCommandConsumed: () -> Unit,
     /** Truyện đang được mở/chỉnh sửa ở tab Text (null nếu không gắn file thư viện). */
     activeEditingStoryId: Long? = null,
+    /** Gọi đồng bộ ngay khi user chạm mở truyện (trước IO resolve id chương). */
+    onBeginOpenStoryFromLibraryTap: () -> Unit = {},
+    /** Gọi khi không resolve được id chương sau tap (huỷ trạng thái loading sớm). */
+    onAbortOpenStoryFromLibraryTap: () -> Unit = {},
     onOpenStory: suspend (Long) -> Boolean,
     onLibraryChanged: () -> Unit,
     postLibraryFolderImportProgress: (OpenFileProgressUi?) -> Unit,
@@ -306,6 +310,7 @@ fun LibraryTab(
                                                 ).show()
                                                 return@clickable
                                             }
+                                            onBeginOpenStoryFromLibraryTap()
                                             scope.launch {
                                                 val id =
                                                     withContext(Dispatchers.IO) {
@@ -317,6 +322,7 @@ fun LibraryTab(
                                                 if (id != null) {
                                                     onOpenStory(id)
                                                 } else {
+                                                    onAbortOpenStoryFromLibraryTap()
                                                     Toast.makeText(
                                                         ctx,
                                                         "Chưa có chương trong truyện này.",

@@ -64,7 +64,10 @@ import com.ttsaistory.app.domain.parseDeferredZipEntryOnlineUrl
 import com.ttsaistory.app.domain.parseHttpUrlFromSharedText
 import com.ttsaistory.app.domain.buildParagraphSpeakJobs
 import com.ttsaistory.app.domain.parseTtsParagraphIndex
+import com.ttsaistory.app.domain.deferredArchiveLazyItemIndex1
 import com.ttsaistory.app.domain.deferredEpubChapterOnlineUrl
+import com.ttsaistory.app.domain.deferredArchiveSourceKeyFromLazyOnlineUrl
+import com.ttsaistory.app.domain.deferredImportFrontierIndex1
 import com.ttsaistory.app.domain.deferredPdfPageOnlineUrl
 import com.ttsaistory.app.domain.deferredZipEntryOnlineUrl
 import com.ttsaistory.app.domain.readEpubChapterPlainText
@@ -136,6 +139,7 @@ private suspend fun openLibraryStoryByIdForMainTabs(
     paragraphDraftFlush: (() -> Unit)?,
     serializeOpenTabTextForLibrary: () -> String,
 ): Boolean {
+    readerService.setLibraryChapterLoadUiActive(true)
     stopAllSpeechReading()
     paragraphDraftFlush?.invoke()
     yield()
@@ -176,11 +180,18 @@ private suspend fun openLibraryStoryByIdForMainTabs(
             "Không tìm thấy chương trong thư viện.",
             Toast.LENGTH_SHORT,
         ).show()
+        readerService.setLibraryChapterLoadUiActive(false)
         return false
     }
     setActiveLibraryStoryId(storyId)
     val deferredMaterialized =
-        materializeDeferredStoryIfNeeded(storyLibrary, storyId)
+        withContext(Dispatchers.IO) {
+            materializeDeferredStoryIfNeeded(
+                storyLibrary,
+                storyId,
+                allowBackwardDeferredFill = false,
+            )
+        }
     if (deferredMaterialized) {
         bumpLibraryRefresh()
     } else if (storyLibrary.storyNeedsOnlineContentRefresh(rowForRefresh)) {
@@ -211,6 +222,7 @@ private suspend fun openLibraryStoryByIdForMainTabs(
             Toast.LENGTH_LONG,
         ).show()
         setActiveLibraryStoryId(previousActiveLibraryStoryId)
+        readerService.setLibraryChapterLoadUiActive(false)
         return false
     }
     val cleaned = canonicalTextFromRaw(body)
@@ -231,99 +243,121 @@ private suspend fun openLibraryStoryByIdForMainTabs(
 private suspend fun materializeDeferredStoryIfNeeded(
     storyLibrary: StoryLibraryRepository,
     storyId: Long,
-): Boolean {
-    val row = storyLibrary.getStory(storyId) ?: return false
-    if (row.onlineContentParseOk) return false
-    val pdfSpec = parseDeferredPdfPageOnlineUrl(row.onlinePageUrl)
-    if (pdfSpec != null) {
-        val body =
-            try {
-                readPdfSinglePageText(File(pdfSpec.sourcePdfPath), pdfSpec.pageIndex1).trim()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: OutOfMemoryError) {
-                return false
-            }
-        if (body.isNotEmpty()) {
-            storyLibrary.updateStoryText(storyId, canonicalTextFromRaw(body))
-        }
-        storyLibrary.markOnlineStoryContentParseSuccess(storyId, null)
-        val nextPage = pdfSpec.pageIndex1 + 1
-        if (nextPage <= pdfSpec.totalPages) {
-            val nextTitle = String.format(Locale.US, "%08d", nextPage)
-            val exists = storyLibrary.listStories(row.categoryId).any { it.title.trim() == nextTitle }
-            if (!exists) {
-                storyLibrary.insertStory(
-                    categoryId = row.categoryId,
-                    title = nextTitle,
-                    body = "",
-                    onlinePageUrl =
-                        deferredPdfPageOnlineUrl(
-                            sourcePdfPath = pdfSpec.sourcePdfPath,
-                            pageIndex1 = nextPage,
-                            totalPages = pdfSpec.totalPages,
-                        ),
-                )
+    allowBackwardDeferredFill: Boolean = false,
+): Boolean =
+    storyLibrary.withDeferredArchiveWriteLock {
+        val row = storyLibrary.getStory(storyId) ?: return@withDeferredArchiveWriteLock false
+        if (row.onlineContentParseOk) return@withDeferredArchiveWriteLock false
+        if (!allowBackwardDeferredFill) {
+            val lazyIdx = deferredArchiveLazyItemIndex1(row.onlinePageUrl)
+            if (lazyIdx != null) {
+                val catRows = storyLibrary.listStories(row.categoryId)
+                val src = resolveDeferredImportSourceFromCategoryRows(catRows) ?: return@withDeferredArchiveWriteLock false
+                val sk = deferredArchiveSourceKey(src)
+                val markMax = storyLibrary.maxDeferredArchiveProcessedIndex1(row.categoryId, sk)
+                val frontier = deferredImportFrontierIndex1(catRows, src.totalItems, markMax)
+                if (lazyIdx < frontier) return@withDeferredArchiveWriteLock false
             }
         }
-        return true
+        val pdfSpec = parseDeferredPdfPageOnlineUrl(row.onlinePageUrl)
+        if (pdfSpec != null) {
+            val body =
+                try {
+                    readPdfSinglePageText(File(pdfSpec.sourcePdfPath), pdfSpec.pageIndex1).trim()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: OutOfMemoryError) {
+                    return@withDeferredArchiveWriteLock false
+                }
+            if (body.isNotEmpty()) {
+                storyLibrary.updateStoryText(storyId, canonicalTextFromRaw(body))
+            }
+            storyLibrary.markOnlineStoryContentParseSuccess(storyId, null)
+            deferredArchiveSourceKeyFromLazyOnlineUrl(row.onlinePageUrl)?.let { k ->
+                storyLibrary.markDeferredArchiveItemProcessed(row.categoryId, k, pdfSpec.pageIndex1)
+            }
+            val nextPage = pdfSpec.pageIndex1 + 1
+            if (nextPage <= pdfSpec.totalPages) {
+                val nextTitle = String.format(Locale.US, "%08d", nextPage)
+                val exists = storyLibrary.listStories(row.categoryId).any { it.title.trim() == nextTitle }
+                if (!exists) {
+                    storyLibrary.insertStory(
+                        categoryId = row.categoryId,
+                        title = nextTitle,
+                        body = "",
+                        onlinePageUrl =
+                            deferredPdfPageOnlineUrl(
+                                sourcePdfPath = pdfSpec.sourcePdfPath,
+                                pageIndex1 = nextPage,
+                                totalPages = pdfSpec.totalPages,
+                            ),
+                    )
+                }
+            }
+            return@withDeferredArchiveWriteLock true
+        }
+        val zipSpec = parseDeferredZipEntryOnlineUrl(row.onlinePageUrl)
+        if (zipSpec != null) {
+            val body = readZipTextEntryByIndex(File(zipSpec.sourceZipPath), zipSpec.entryIndex1).trim()
+            if (body.isNotEmpty()) {
+                storyLibrary.updateStoryText(storyId, canonicalTextFromRaw(body))
+            }
+            storyLibrary.markOnlineStoryContentParseSuccess(storyId, null)
+            deferredArchiveSourceKeyFromLazyOnlineUrl(row.onlinePageUrl)?.let { k ->
+                storyLibrary.markDeferredArchiveItemProcessed(row.categoryId, k, zipSpec.entryIndex1)
+            }
+            val next = zipSpec.entryIndex1 + 1
+            if (next <= zipSpec.totalEntries) {
+                val nextTitle = String.format(Locale.US, "%08d", next)
+                val exists = storyLibrary.listStories(row.categoryId).any { it.title.trim() == nextTitle }
+                if (!exists) {
+                    storyLibrary.insertStory(
+                        categoryId = row.categoryId,
+                        title = nextTitle,
+                        body = "",
+                        onlinePageUrl =
+                            deferredZipEntryOnlineUrl(
+                                sourceZipPath = zipSpec.sourceZipPath,
+                                entryIndex1 = next,
+                                totalEntries = zipSpec.totalEntries,
+                            ),
+                    )
+                }
+            }
+            return@withDeferredArchiveWriteLock true
+        }
+        val epubSpec = parseDeferredEpubChapterOnlineUrl(row.onlinePageUrl)
+        if (epubSpec != null) {
+            val body = readEpubChapterPlainText(File(epubSpec.sourceEpubPath), epubSpec.chapterIndex1).trim()
+            if (body.isNotEmpty()) {
+                storyLibrary.updateStoryText(storyId, canonicalTextFromRaw(body))
+            }
+            storyLibrary.markOnlineStoryContentParseSuccess(storyId, null)
+            deferredArchiveSourceKeyFromLazyOnlineUrl(row.onlinePageUrl)?.let { k ->
+                storyLibrary.markDeferredArchiveItemProcessed(row.categoryId, k, epubSpec.chapterIndex1)
+            }
+            val next = epubSpec.chapterIndex1 + 1
+            if (next <= epubSpec.totalChapters) {
+                val nextTitle = String.format(Locale.US, "%08d", next)
+                val exists = storyLibrary.listStories(row.categoryId).any { it.title.trim() == nextTitle }
+                if (!exists) {
+                    storyLibrary.insertStory(
+                        categoryId = row.categoryId,
+                        title = nextTitle,
+                        body = "",
+                        onlinePageUrl =
+                            deferredEpubChapterOnlineUrl(
+                                sourceEpubPath = epubSpec.sourceEpubPath,
+                                chapterIndex1 = next,
+                                totalChapters = epubSpec.totalChapters,
+                            ),
+                    )
+                }
+            }
+            return@withDeferredArchiveWriteLock true
+        }
+        return@withDeferredArchiveWriteLock false
     }
-    val zipSpec = parseDeferredZipEntryOnlineUrl(row.onlinePageUrl)
-    if (zipSpec != null) {
-        val body = readZipTextEntryByIndex(File(zipSpec.sourceZipPath), zipSpec.entryIndex1).trim()
-        if (body.isNotEmpty()) {
-            storyLibrary.updateStoryText(storyId, canonicalTextFromRaw(body))
-        }
-        storyLibrary.markOnlineStoryContentParseSuccess(storyId, null)
-        val next = zipSpec.entryIndex1 + 1
-        if (next <= zipSpec.totalEntries) {
-            val nextTitle = String.format(Locale.US, "%08d", next)
-            val exists = storyLibrary.listStories(row.categoryId).any { it.title.trim() == nextTitle }
-            if (!exists) {
-                storyLibrary.insertStory(
-                    categoryId = row.categoryId,
-                    title = nextTitle,
-                    body = "",
-                    onlinePageUrl =
-                        deferredZipEntryOnlineUrl(
-                            sourceZipPath = zipSpec.sourceZipPath,
-                            entryIndex1 = next,
-                            totalEntries = zipSpec.totalEntries,
-                        ),
-                )
-            }
-        }
-        return true
-    }
-    val epubSpec = parseDeferredEpubChapterOnlineUrl(row.onlinePageUrl)
-    if (epubSpec != null) {
-        val body = readEpubChapterPlainText(File(epubSpec.sourceEpubPath), epubSpec.chapterIndex1).trim()
-        if (body.isNotEmpty()) {
-            storyLibrary.updateStoryText(storyId, canonicalTextFromRaw(body))
-        }
-        storyLibrary.markOnlineStoryContentParseSuccess(storyId, null)
-        val next = epubSpec.chapterIndex1 + 1
-        if (next <= epubSpec.totalChapters) {
-            val nextTitle = String.format(Locale.US, "%08d", next)
-            val exists = storyLibrary.listStories(row.categoryId).any { it.title.trim() == nextTitle }
-            if (!exists) {
-                storyLibrary.insertStory(
-                    categoryId = row.categoryId,
-                    title = nextTitle,
-                    body = "",
-                    onlinePageUrl =
-                        deferredEpubChapterOnlineUrl(
-                            sourceEpubPath = epubSpec.sourceEpubPath,
-                            chapterIndex1 = next,
-                            totalChapters = epubSpec.totalChapters,
-                        ),
-                )
-            }
-        }
-        return true
-    }
-    return false
-}
 
 private enum class DeferredImportKind { PDF, ZIP, EPUB }
 
@@ -381,6 +415,14 @@ private fun resolveDeferredImportSourceFromCategoryRows(
     return null
 }
 
+/** Khớp [deferredArchiveSourceKeyFromLazyOnlineUrl] (pdf|zip|epub|đường dẫn|tổng). */
+private fun deferredArchiveSourceKey(source: DeferredImportSource): String =
+    when (source.kind) {
+        DeferredImportKind.PDF -> "pdf|${source.sourcePath.trim()}|${source.totalItems}"
+        DeferredImportKind.ZIP -> "zip|${source.sourcePath.trim()}|${source.totalItems}"
+        DeferredImportKind.EPUB -> "epub|${source.sourcePath.trim()}|${source.totalItems}"
+    }
+
 private fun buildDeferredOnlineUrl(
     source: DeferredImportSource,
     index1: Int,
@@ -409,123 +451,174 @@ private suspend fun ensureDeferredPrefetchWindowFromCurrentStory(
     currentStoryId: Long,
     minItemsFromCurrent: Int = 10,
     startFromFirstPending: Boolean = false,
+    allowBackwardDeferredFill: Boolean = false,
     onProcessingItem: ((DeferredImportSource, Int) -> Unit)? = null,
-): DeferredPrefetchResult {
-    val current =
-        storyLibrary.getStory(currentStoryId)
-            ?: return DeferredPrefetchResult(changed = false, hasSource = false, hasRemaining = false)
-    val currentIndex1 =
-        parseEightDigitStoryIndex(current.title)
-            ?: return DeferredPrefetchResult(changed = false, hasSource = false, hasRemaining = false)
-    val rows = storyLibrary.listStories(current.categoryId)
-    val source = resolveDeferredImportSourceFromCategoryRows(rows)
-        ?: return DeferredPrefetchResult(changed = false, hasSource = false, hasRemaining = false)
-    val existingByTitle =
-        rows.associateBy { it.title.trim() }
-    val firstPendingIndex1 =
-        (currentIndex1..source.totalItems).firstOrNull { idx ->
-            val title = String.format(Locale.US, "%08d", idx)
-            val row = existingByTitle[title]
-            row == null || !row.onlineContentParseOk
-        }
-    if (firstPendingIndex1 == null) {
-        return DeferredPrefetchResult(changed = false, hasSource = true, hasRemaining = false)
-    }
-    val startIndex1 = if (startFromFirstPending) firstPendingIndex1 else currentIndex1
-    val endIndex1 = minOf(source.totalItems, startIndex1 + minItemsFromCurrent - 1)
-    if (endIndex1 < startIndex1) {
-        return DeferredPrefetchResult(changed = false, hasSource = true, hasRemaining = false)
-    }
-    var changed = false
-    coroutineScope {
-        val queue = Channel<Int>(16)
-        val producer =
-            launch(Dispatchers.IO) {
-                for (idx in startIndex1..endIndex1) {
-                    queue.send(idx)
-                }
-                queue.close()
+): DeferredPrefetchResult =
+    storyLibrary.withDeferredArchiveWriteLock {
+        val current =
+            storyLibrary.getStory(currentStoryId)
+                ?: return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = false, hasSource = false, hasRemaining = false)
+        val currentIndex1 =
+            parseEightDigitStoryIndex(current.title)
+                ?: return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = false, hasSource = false, hasRemaining = false)
+        val rows = storyLibrary.listStories(current.categoryId)
+        val source = resolveDeferredImportSourceFromCategoryRows(rows)
+            ?: return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = false, hasSource = false, hasRemaining = false)
+        val deferredSourceKey = deferredArchiveSourceKey(source)
+        val deferredMarkMax =
+            storyLibrary.maxDeferredArchiveProcessedIndex1(current.categoryId, deferredSourceKey)
+        val frontierIndex1 =
+            deferredImportFrontierIndex1(rows, source.totalItems, deferredMarkMax)
+        val existingByTitle =
+            rows.associateBy { it.title.trim() }
+        val scanLow1 =
+            if (allowBackwardDeferredFill) {
+                currentIndex1
+            } else {
+                maxOf(currentIndex1, frontierIndex1)
             }
-        val consumer =
-            launch(Dispatchers.IO) {
-                for (idx in queue) {
-                    onProcessingItem?.invoke(source, idx)
+        val firstPendingFromScan =
+            if (scanLow1 <= source.totalItems) {
+                (scanLow1..source.totalItems).firstOrNull { idx ->
+                    if (storyLibrary.isDeferredArchiveItemProcessed(current.categoryId, deferredSourceKey, idx)) {
+                        return@firstOrNull false
+                    }
                     val title = String.format(Locale.US, "%08d", idx)
-                    var row =
-                        storyLibrary
-                            .listStories(current.categoryId)
-                            .firstOrNull { it.title.trim() == title }
-                    if (row == null) {
-                        val newId =
-                            storyLibrary.insertStory(
-                                categoryId = current.categoryId,
-                                title = title,
-                                body = "",
-                                onlinePageUrl = buildDeferredOnlineUrl(source, idx),
-                            )
-                        row = storyLibrary.getStory(newId)
-                        // Chèn lại chương bị thiếu theo vị trí logic: sau chương gần nhất đứng trước nó.
-                        val storiesNow = storyLibrary.listStories(current.categoryId)
-                        val idsNow = storiesNow.map { it.id }.toMutableList()
-                        val insertedPos = idsNow.indexOf(newId)
-                        if (insertedPos >= 0) {
-                            idsNow.removeAt(insertedPos)
-                            val predecessorId =
-                                storiesNow
-                                    .asSequence()
-                                    .filter { parseEightDigitStoryIndex(it.title)?.let { n -> n < idx } == true }
-                                    .maxWithOrNull(
-                                        compareBy<com.ttsaistory.app.data.LibraryStoryRow> {
-                                            parseEightDigitStoryIndex(it.title) ?: Int.MIN_VALUE
-                                        }.thenBy { it.sortOrder }
-                                            .thenBy { it.id },
-                                    )?.id
-                            val targetPos =
-                                if (predecessorId == null) {
-                                    0
-                                } else {
-                                    (idsNow.indexOf(predecessorId) + 1).coerceAtLeast(0)
-                                }
-                            idsNow.add(targetPos.coerceIn(0, idsNow.size), newId)
-                            storyLibrary.reorderStoriesDisplayOrder(current.categoryId, idsNow)
-                        }
-                        changed = true
+                    val row = existingByTitle[title]
+                    row == null || !row.onlineContentParseOk
+                }
+            } else {
+                null
+            }
+        if (startFromFirstPending && firstPendingFromScan == null) {
+            return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = false, hasSource = true, hasRemaining = false)
+        }
+        val startIndex1 =
+            if (startFromFirstPending) {
+                firstPendingFromScan!!
+            } else {
+                scanLow1
+            }
+        if (startIndex1 > source.totalItems) {
+            return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = false, hasSource = true, hasRemaining = false)
+        }
+        val endIndex1 = minOf(source.totalItems, startIndex1 + minItemsFromCurrent - 1)
+        if (endIndex1 < startIndex1) {
+            return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = false, hasSource = true, hasRemaining = false)
+        }
+        var changed = false
+        coroutineScope {
+            val queue = Channel<Int>(16)
+            val producer =
+                launch(Dispatchers.IO) {
+                    for (idx in startIndex1..endIndex1) {
+                        queue.send(idx)
                     }
-                    if (row == null || row.onlineContentParseOk) continue
-                    try {
-                        val body = readDeferredItemText(source, idx).trim()
-                        if (body.isNotEmpty()) {
-                            storyLibrary.updateStoryText(row.id, canonicalTextFromRaw(body))
+                    queue.close()
+                }
+            val consumer =
+                launch(Dispatchers.IO) {
+                    for (idx in queue) {
+                        onProcessingItem?.invoke(source, idx)
+                        if (storyLibrary.isDeferredArchiveItemProcessed(current.categoryId, deferredSourceKey, idx)) {
+                            continue
                         }
-                        storyLibrary.markOnlineStoryContentParseSuccess(row.id, null)
-                        changed = true
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (oom: OutOfMemoryError) {
-                        AnrDiagLog.i(
-                            "Deferred prefetch skipped ${deferredKindDisplayName(source.kind)} $idx/${source.totalItems}: OOM during item processing",
-                        )
-                        continue
-                    } catch (e: Exception) {
-                        AnrDiagLog.i(
-                            "Deferred prefetch skipped ${deferredKindDisplayName(source.kind)} $idx/${source.totalItems}: ${e.message ?: "unknown"}",
-                        )
-                        continue
+                        val title = String.format(Locale.US, "%08d", idx)
+                        var row =
+                            storyLibrary
+                                .listStories(current.categoryId)
+                                .firstOrNull { it.title.trim() == title }
+                        if (row == null) {
+                            val newId =
+                                storyLibrary.insertStory(
+                                    categoryId = current.categoryId,
+                                    title = title,
+                                    body = "",
+                                    onlinePageUrl = buildDeferredOnlineUrl(source, idx),
+                                )
+                            row = storyLibrary.getStory(newId)
+                            // Chèn lại chương bị thiếu theo vị trí logic: sau chương gần nhất đứng trước nó.
+                            val storiesNow = storyLibrary.listStories(current.categoryId)
+                            val idsNow = storiesNow.map { it.id }.toMutableList()
+                            val insertedPos = idsNow.indexOf(newId)
+                            if (insertedPos >= 0) {
+                                idsNow.removeAt(insertedPos)
+                                val predecessorId =
+                                    storiesNow
+                                        .asSequence()
+                                        .filter { parseEightDigitStoryIndex(it.title)?.let { n -> n < idx } == true }
+                                        .maxWithOrNull(
+                                            compareBy<com.ttsaistory.app.data.LibraryStoryRow> {
+                                                parseEightDigitStoryIndex(it.title) ?: Int.MIN_VALUE
+                                            }.thenBy { it.sortOrder }
+                                                .thenBy { it.id },
+                                        )?.id
+                                val targetPos =
+                                    if (predecessorId == null) {
+                                        0
+                                    } else {
+                                        (idsNow.indexOf(predecessorId) + 1).coerceAtLeast(0)
+                                    }
+                                idsNow.add(targetPos.coerceIn(0, idsNow.size), newId)
+                                storyLibrary.reorderStoriesDisplayOrder(current.categoryId, idsNow)
+                            }
+                            changed = true
+                        }
+                        if (row == null || row.onlineContentParseOk) continue
+                        try {
+                            val body = readDeferredItemText(source, idx).trim()
+                            if (body.isNotEmpty()) {
+                                storyLibrary.updateStoryText(row.id, canonicalTextFromRaw(body))
+                            }
+                            storyLibrary.markOnlineStoryContentParseSuccess(row.id, null)
+                            storyLibrary.markDeferredArchiveItemProcessed(
+                                current.categoryId,
+                                deferredSourceKey,
+                                idx,
+                            )
+                            changed = true
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (oom: OutOfMemoryError) {
+                            AnrDiagLog.i(
+                                "Deferred prefetch skipped ${deferredKindDisplayName(source.kind)} $idx/${source.totalItems}: OOM during item processing",
+                            )
+                            continue
+                        } catch (e: Exception) {
+                            AnrDiagLog.i(
+                                "Deferred prefetch skipped ${deferredKindDisplayName(source.kind)} $idx/${source.totalItems}: ${e.message ?: "unknown"}",
+                            )
+                            continue
+                        }
                     }
                 }
-            }
-        producer.join()
-        consumer.join()
-    }
-    val rowsAfter = storyLibrary.listStories(current.categoryId).associateBy { it.title.trim() }
-    val hasRemaining =
-        (currentIndex1..source.totalItems).any { idx ->
-            val title = String.format(Locale.US, "%08d", idx)
-            val row = rowsAfter[title]
-            row == null || !row.onlineContentParseOk
+            producer.join()
+            consumer.join()
         }
-    return DeferredPrefetchResult(changed = changed, hasSource = true, hasRemaining = hasRemaining)
-}
+        val rowsAfter = storyLibrary.listStories(current.categoryId).associateBy { it.title.trim() }
+        val rowsFinal = storyLibrary.listStories(current.categoryId)
+        val markMaxAfter =
+            storyLibrary.maxDeferredArchiveProcessedIndex1(current.categoryId, deferredSourceKey)
+        val frontierAfter =
+            deferredImportFrontierIndex1(rowsFinal, source.totalItems, markMaxAfter)
+        val hasRemainingLow =
+            if (allowBackwardDeferredFill) {
+                currentIndex1
+            } else {
+                frontierAfter
+            }
+        val hasRemaining =
+            hasRemainingLow <= source.totalItems &&
+                (hasRemainingLow..source.totalItems).any { idx ->
+                    if (storyLibrary.isDeferredArchiveItemProcessed(current.categoryId, deferredSourceKey, idx)) {
+                        return@any false
+                    }
+                    val title = String.format(Locale.US, "%08d", idx)
+                    val row = rowsAfter[title]
+                    row == null || !row.onlineContentParseOk
+                }
+        return@withDeferredArchiveWriteLock DeferredPrefetchResult(changed = changed, hasSource = true, hasRemaining = hasRemaining)
+    }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -734,6 +827,7 @@ fun AppTabs() {
                                     raw,
                                     storyLibrary,
                                     displayName,
+                                    downloadsStagingSourceUri = stagedUri.toString(),
                                 )
                             text = r.cleanedText
                             prefs.saveLastText(r.cleanedText)
@@ -1382,6 +1476,7 @@ fun AppTabs() {
                             raw,
                             storyLibrary,
                             latestLibraryStoryId,
+                            downloadsStagingSourceUri = stagedViewTxt.toString(),
                         )
                     commitInboundPersistResult(r)
                 } catch (e: CancellationException) {
@@ -1679,11 +1774,13 @@ fun AppTabs() {
         archiveImportCategoryDoneHandler.consume = { categoryId ->
             coroutineScope.launch {
                 libraryRefreshTrigger++
+                readerService.setLibraryChapterLoadUiActive(true)
                 val firstId =
                     withContext(Dispatchers.IO) {
                         storyLibrary.listStories(categoryId).firstOrNull()?.id
                     }
                 if (firstId == null) {
+                    readerService.setLibraryChapterLoadUiActive(false)
                     tabIndex = 1
                     return@launch
                 }
@@ -1765,6 +1862,7 @@ fun AppTabs() {
         coroutineScope.launch {
             try {
                 val finishedSid = latestActiveLibraryStoryId ?: return@launch
+                readerService.setLibraryChapterLoadUiActive(true)
                 paragraphDraftFlush?.invoke()
                 yield()
                 val bodyToFinish =
@@ -1776,17 +1874,24 @@ fun AppTabs() {
                     }
                 if (!saved) {
                     activeLibraryStoryId = null
+                    readerService.setLibraryChapterLoadUiActive(false)
                     return@launch
                 }
                 libraryRefreshTrigger++
                 val nextRow =
                     withContext(Dispatchers.IO) {
                         storyLibrary.nextStoryInCategoryAfter(finishedSid)
-                    } ?: return@launch
+                    } ?: run {
+                        readerService.setLibraryChapterLoadUiActive(false)
+                        return@launch
+                    }
                 val nextBody =
                     withContext(Dispatchers.IO) {
                         storyLibrary.readStoryText(nextRow.id)
-                    } ?: return@launch
+                    } ?: run {
+                        readerService.setLibraryChapterLoadUiActive(false)
+                        return@launch
+                    }
                 val cleaned = canonicalTextFromRaw(nextBody)
                 text = cleaned
                 prefs.saveLastText(cleaned)
@@ -1799,6 +1904,7 @@ fun AppTabs() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                readerService.setLibraryChapterLoadUiActive(false)
                 Toast.makeText(
                     context,
                     e.message ?: "Lỗi chuyển chương tiếp theo",
@@ -2075,6 +2181,19 @@ fun AppTabs() {
                 launchParagraphPlayback(paras, startIdx)
             },
             onLibraryFileSynced = { librarySyncEpoch++ },
+            onReloadLibraryChapterTextFromDisk = reloadLib@{ storyId ->
+                libraryFileAutosaveHolder.job?.cancel()
+                libraryFileAutosaveHolder.job = null
+                val body =
+                    withContext(Dispatchers.IO) {
+                        storyLibrary.readStoryText(storyId)
+                    } ?: return@reloadLib
+//                val cleaned = canonicalTextFromRaw(body)
+                text = body
+                prefs.saveLastText(text)
+                librarySyncEpoch++
+                libraryRefreshTrigger++
+            },
             onLibraryDataChanged = { libraryRefreshTrigger++ },
             onSavedLibraryStoryFromEditor = { id ->
                 activeLibraryStoryId = id
@@ -2113,6 +2232,17 @@ fun AppTabs() {
                             ?: canonicalTextFromRaw(text)
                     },
                 )
+            },
+            onReloadDeferredArchiveStory = { storyId ->
+                val did =
+                    withContext(Dispatchers.IO) {
+                        materializeDeferredStoryIfNeeded(
+                            storyLibrary,
+                            storyId,
+                            allowBackwardDeferredFill = true,
+                        )
+                    }
+                did
             },
             onOpenTextFileFromStorage = {
                 openTextDocumentLauncher.launch(

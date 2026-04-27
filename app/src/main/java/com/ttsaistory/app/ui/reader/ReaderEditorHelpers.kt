@@ -126,6 +126,9 @@ data class ReaderBottomNavBridge(
      */
     val paragraphSplitEditBreakPageEnabled: Boolean = false,
     val onParagraphSplitEditBreakPage: () -> Unit = {},
+    /** Tách chương thư viện theo số câu / trang trong prefs (nhiều chương con). */
+    val paragraphSplitEditAutoBreakChapterEnabled: Boolean = false,
+    val onParagraphSplitEditAutoBreakChapter: () -> Unit = {},
     val onParagraphSplitEditCaseToggle: () -> Unit = {},
     /** Luôn ẩn IME khi đang tab Text; bật/tắt qua bottom bar, lưu prefs. */
     val readerKeyboardForceHidden: Boolean = false,

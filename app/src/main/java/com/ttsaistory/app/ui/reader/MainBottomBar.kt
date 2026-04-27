@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.material.icons.filled.FirstPage
 import androidx.compose.material.icons.filled.HorizontalSplit
 import androidx.compose.material.icons.outlined.Keyboard
@@ -291,6 +292,16 @@ fun MainBottomBar(
                                 Icon(
                                     imageVector = Icons.Filled.ContentCut,
                                     contentDescription = "Tách chương: phần từ câu hiện tại tới hết thành chương mới",
+                                )
+                            }
+                            IconButton(
+                                onClick = { nav.onParagraphSplitEditAutoBreakChapter() },
+                                enabled = nav.paragraphSplitEditAutoBreakChapterEnabled,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.DynamicFeed,
+                                    contentDescription =
+                                        "Tách chương tự động theo số câu / trang trong cài đặt",
                                 )
                             }
                         }

@@ -4,6 +4,7 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.Uri
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
@@ -15,12 +16,21 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import com.ttsaistory.app.domain.buildEpub3ZipBytes
 import com.ttsaistory.app.domain.canonicalTextFromRaw
+import com.ttsaistory.app.domain.deferredArchiveSourceKeyFromLazyOnlineUrl
+import com.ttsaistory.app.domain.parseDeferredEpubChapterOnlineUrl
+import com.ttsaistory.app.domain.parseDeferredPdfPageOnlineUrl
+import com.ttsaistory.app.domain.parseDeferredZipEntryOnlineUrl
+import com.ttsaistory.app.domain.isDeferredArchiveLazyOnlineUrl
+import com.ttsaistory.app.domain.mergeParagraphs
+import com.ttsaistory.app.domain.parseEightDigitDeferredArchiveStoryIndex1
+import com.ttsaistory.app.domain.ParagraphTextService
 import com.ttsaistory.app.domain.splitIntoParagraphs
 import com.ttsaistory.app.domain.firstLineForEpubNavigationLabel
 import com.ttsaistory.app.domain.listImportFolderFilesSorted
 import com.ttsaistory.app.domain.readUtf8FromImportTreeEntry
 import com.ttsaistory.app.domain.readMergedUtf8FromDocumentTree
 import com.ttsaistory.app.domain.readUtf8FromDocumentUri
+import com.ttsaistory.app.domain.deleteTtsAiStoryDownloadsStagingCopy
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -28,7 +38,11 @@ import java.io.OutputStreamWriter
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.io.bufferedReader
+import com.ttsaistory.app.model.AppPreferenceKeys
 import java.util.Locale
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class LibraryCategoryRow(
     val id: Long,
@@ -130,6 +144,17 @@ private class StoryLibraryOpenHelper(context: Context) :
             )
             """.trimIndent(),
         )
+        db.execSQL(
+            """
+            CREATE TABLE deferred_archive_processed_items (
+                category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+                source_key TEXT NOT NULL,
+                item_index1 INTEGER NOT NULL,
+                processed_at INTEGER NOT NULL,
+                PRIMARY KEY (category_id, source_key, item_index1)
+            )
+            """.trimIndent(),
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -215,6 +240,19 @@ private class StoryLibraryOpenHelper(context: Context) :
                 """.trimIndent(),
             )
         }
+        if (oldVersion < 12) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS deferred_archive_processed_items (
+                    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+                    source_key TEXT NOT NULL,
+                    item_index1 INTEGER NOT NULL,
+                    processed_at INTEGER NOT NULL,
+                    PRIMARY KEY (category_id, source_key, item_index1)
+                )
+                """.trimIndent(),
+            )
+        }
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -223,7 +261,7 @@ private class StoryLibraryOpenHelper(context: Context) :
 
     companion object {
         const val DB_NAME = "story_library.db"
-        const val DB_VERSION = 11
+        const val DB_VERSION = 12
         const val DEFAULT_CATEGORY_NAME = "Chưa phân loại"
     }
 }
@@ -236,6 +274,15 @@ class StoryLibraryRepository(private val context: Context) {
 
     private val helper = StoryLibraryOpenHelper(context)
 
+    /**
+     * Tuần tự hóa mọi ghi liên quan import deferred (PDF/ZIP/EPUB) —
+     * tránh reorder / chèn chương xen kẽ với prefetch nền.
+     */
+    private val deferredArchiveWriteMutex = Mutex()
+
+    suspend fun <T> withDeferredArchiveWriteLock(block: suspend () -> T): T =
+        deferredArchiveWriteMutex.withLock { block() }
+
     fun libraryRootDir(): File {
         val base = context.getExternalFilesDir(null) ?: context.filesDir
         return File(base, LIBRARY_FOLDER).apply { mkdirs() }
@@ -245,6 +292,7 @@ class StoryLibraryRepository(private val context: Context) {
         File(libraryRootDir(), "cat_$categoryId").apply { mkdirs() }
 
     fun listCategories(): List<LibraryCategoryRow> {
+        ensureDeferredArchiveProcessedBackfillAfterDbUpgrade()
         val db = helper.readableDatabase
         db.rawQuery(
             """
@@ -592,11 +640,14 @@ class StoryLibraryRepository(private val context: Context) {
     }
 
     /** Lưu nội dung đã chuẩn hoá vào thể loại [INBOUND_UNTITLED_CATEGORY_NAME], tiêu đề `không tên N`. */
-    fun importInboundTextAsUntitledStory(canonicalBody: String): Pair<Long, String> {
+    fun importInboundTextAsUntitledStory(
+        canonicalBody: String,
+        importSourceUri: String? = null,
+    ): Pair<Long, String> {
         val catId = getOrCreateCategoryByName(INBOUND_UNTITLED_CATEGORY_NAME)
         val n = nextUntitledInboundStorySuffix(catId)
         val title = "không tên $n"
-        val id = insertStory(catId, title, canonicalBody)
+        val id = insertStory(catId, title, canonicalBody, importSourceUri = importSourceUri)
         return id to title
     }
 
@@ -616,10 +667,14 @@ class StoryLibraryRepository(private val context: Context) {
     /**
      * Lưu nội dung chia sẻ vào thể loại [categoryId] (thể loại của truyện đang mở); tiêu đề `Chia sẻ N`.
      */
-    fun importSharedTextIntoCategory(categoryId: Long, canonicalBody: String): Pair<Long, String> {
+    fun importSharedTextIntoCategory(
+        categoryId: Long,
+        canonicalBody: String,
+        importSourceUri: String? = null,
+    ): Pair<Long, String> {
         val n = nextShareImportTitleSuffix(categoryId)
         val title = "Chia sẻ $n"
-        val id = insertStory(categoryId, title, canonicalBody)
+        val id = insertStory(categoryId, title, canonicalBody, importSourceUri = importSourceUri)
         return id to title
     }
 
@@ -747,6 +802,59 @@ class StoryLibraryRepository(private val context: Context) {
             }
     }
 
+    /**
+     * Thư mục giải nén EPUB/ZIP/PDF (`…/tts-ai-story/<tên>/`) chỉ lưu bằng `file://` từ
+     * [setCategoryImportFolderTreeUri] — không áp dụng cho URI cây SAF «Import thư mục».
+     */
+    private fun archiveExtractRootFromFileImportTreeUri(uriStr: String): File? {
+        val u = runCatching { Uri.parse(uriStr.trim()) }.getOrNull() ?: return null
+        if (!u.scheme.equals("file", ignoreCase = true)) return null
+        val path = u.path ?: return null
+        val dir = runCatching { File(path).canonicalFile }.getOrNull() ?: return null
+        if (!dir.isDirectory) return null
+        val abs = dir.absolutePath.replace('\\', '/')
+        val seg = "/$EXPORT_DOWNLOAD_FOLDER/"
+        if (!abs.contains(seg) && !abs.endsWith("/$EXPORT_DOWNLOAD_FOLDER")) return null
+        return dir
+    }
+
+    private fun deferredArchiveSourceFileFromOnlinePageUrl(url: String?): File? {
+        val u = url?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        parseDeferredPdfPageOnlineUrl(u)?.let { return File(it.sourcePdfPath) }
+        parseDeferredZipEntryOnlineUrl(u)?.let { return File(it.sourceZipPath) }
+        parseDeferredEpubChapterOnlineUrl(u)?.let { return File(it.sourceEpubPath) }
+        return null
+    }
+
+    private fun canonicalFilePathOrNull(f: File): String? =
+        runCatching { f.canonicalFile.absolutePath }.getOrNull()
+
+    private fun anyStoryStillReferencesArchiveExtractRoot(
+        categoryId: Long,
+        extractRootCanon: String,
+    ): Boolean {
+        val rootWithSep = extractRootCanon + File.separator
+        for (s in listStories(categoryId)) {
+            val src = deferredArchiveSourceFileFromOnlinePageUrl(s.onlinePageUrl) ?: continue
+            val c = canonicalFilePathOrNull(src) ?: continue
+            if (c == extractRootCanon || c.startsWith(rootWithSep)) return true
+        }
+        return false
+    }
+
+    /**
+     * Sau khi xóa chương: nếu không còn chương nào tham chiếu file nguồn trong thư mục giải nén
+     * `Download/tts-ai-story/…` đã gắn thể loại — xóa thư mục đó và gỡ `import_folder_tree_uri` dạng file.
+     */
+    private fun maybeDeleteOrphanedTtsAiStoryArchiveExtractDir(categoryId: Long) {
+        val uriStr = getCategoryImportFolderTreeUri(categoryId) ?: return
+        val root = archiveExtractRootFromFileImportTreeUri(uriStr) ?: return
+        val rootCanon = runCatching { root.canonicalPath }.getOrNull() ?: return
+        if (anyStoryStillReferencesArchiveExtractRoot(categoryId, rootCanon)) return
+        runCatching { root.deleteRecursively() }
+        runCatching { setCategoryImportFolderTreeUri(categoryId, null) }
+    }
+
     private fun getCategoryName(categoryId: Long): String? {
         helper.readableDatabase
             .rawQuery(
@@ -777,6 +885,11 @@ class StoryLibraryRepository(private val context: Context) {
                 if (c.moveToFirst()) c.getString(0)?.trim()?.takeIf { it.isNotEmpty() } else null
             }
         treeUriStr?.let { s ->
+            archiveExtractRootFromFileImportTreeUri(s)?.let { root ->
+                runCatching { root.deleteRecursively() }
+            }
+        }
+        treeUriStr?.let { s ->
             val u = runCatching { Uri.parse(s) }.getOrNull()
             if (u != null && DocumentsContract.isTreeUri(u)) {
                 runCatching {
@@ -788,12 +901,25 @@ class StoryLibraryRepository(private val context: Context) {
             }
         }
         val paths = mutableListOf<String>()
+        val importUris = mutableListOf<String?>()
         db.rawQuery(
-            "SELECT file_path FROM saved_stories WHERE category_id = ?",
+            "SELECT file_path, import_source_uri FROM saved_stories WHERE category_id = ?",
             arrayOf(categoryId.toString()),
         ).use { c ->
             while (c.moveToNext()) {
                 c.getString(0)?.let { paths.add(it) }
+                importUris.add(c.getString(1))
+            }
+        }
+        for (src in importUris) {
+            src?.trim()?.takeIf { it.isNotEmpty() }?.let { s ->
+                runCatching {
+                    context.contentResolver.releasePersistableUriPermission(
+                        Uri.parse(s),
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    )
+                }
+                deleteTtsAiStoryDownloadsStagingCopy(context, s)
             }
         }
         db.delete("categories", "id = ?", arrayOf(categoryId.toString()))
@@ -955,6 +1081,121 @@ class StoryLibraryRepository(private val context: Context) {
                 } == true
 
     /**
+     * Đánh dấu một chỉ số nguồn deferred (PDF/ZIP/EPUB) đã được nạp xong — giữ khi xóa chương để
+     * không nạp lại cùng chỉ số.
+     */
+    fun markDeferredArchiveItemProcessed(
+        categoryId: Long,
+        sourceKey: String,
+        itemIndex1: Int,
+    ) {
+        if (itemIndex1 < 1 || sourceKey.isBlank()) return
+        val db = helper.writableDatabase
+        val cv =
+            ContentValues().apply {
+                put("category_id", categoryId)
+                put("source_key", sourceKey)
+                put("item_index1", itemIndex1)
+                put("processed_at", System.currentTimeMillis())
+            }
+        db.insertWithOnConflict(
+            "deferred_archive_processed_items",
+            null,
+            cv,
+            SQLiteDatabase.CONFLICT_IGNORE,
+        )
+    }
+
+    fun isDeferredArchiveItemProcessed(
+        categoryId: Long,
+        sourceKey: String,
+        itemIndex1: Int,
+    ): Boolean {
+        if (itemIndex1 < 1 || sourceKey.isBlank()) return false
+        val db = helper.readableDatabase
+        db.rawQuery(
+            """
+            SELECT 1 FROM deferred_archive_processed_items
+            WHERE category_id = ? AND source_key = ? AND item_index1 = ?
+            LIMIT 1
+            """.trimIndent(),
+            arrayOf(categoryId.toString(), sourceKey, itemIndex1.toString()),
+        ).use { return it.moveToFirst() }
+    }
+
+    fun maxDeferredArchiveProcessedIndex1(
+        categoryId: Long,
+        sourceKey: String,
+    ): Int {
+        if (sourceKey.isBlank()) return 0
+        val db = helper.readableDatabase
+        db.rawQuery(
+            """
+            SELECT COALESCE(MAX(item_index1), 0) FROM deferred_archive_processed_items
+            WHERE category_id = ? AND source_key = ?
+            """.trimIndent(),
+            arrayOf(categoryId.toString(), sourceKey),
+        ).use {
+            if (!it.moveToFirst()) return 0
+            return it.getInt(0)
+        }
+    }
+
+    private fun ensureDeferredArchiveProcessedBackfillAfterDbUpgrade() {
+        val appPrefs =
+            context.applicationContext.getSharedPreferences(
+                AppPreferenceKeys.PREF_NAME,
+                Context.MODE_PRIVATE,
+            )
+        if (appPrefs.getInt(AppPreferenceKeys.KEY_DEFERRED_ARCHIVE_PROCESSED_BACKFILL_DB_VERSION, 0) >= 12) {
+            return
+        }
+        runCatching {
+            val db = helper.writableDatabase
+            db.beginTransaction()
+            try {
+                db.rawQuery(
+                    """
+                    SELECT category_id, title, online_page_url FROM saved_stories
+                    WHERE online_content_parse_ok = 1
+                    AND online_page_url IS NOT NULL
+                    AND length(trim(online_page_url)) > 0
+                    """.trimIndent(),
+                    null,
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val catId = c.getLong(0)
+                        val title = c.getString(1) ?: continue
+                        val url = c.getString(2) ?: continue
+                        val sk = deferredArchiveSourceKeyFromLazyOnlineUrl(url) ?: continue
+                        val idx = parseEightDigitDeferredArchiveStoryIndex1(title) ?: continue
+                        val cv =
+                            ContentValues().apply {
+                                put("category_id", catId)
+                                put("source_key", sk)
+                                put("item_index1", idx)
+                                put("processed_at", System.currentTimeMillis())
+                            }
+                        db.insertWithOnConflict(
+                            "deferred_archive_processed_items",
+                            null,
+                            cv,
+                            SQLiteDatabase.CONFLICT_IGNORE,
+                        )
+                    }
+                }
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            appPrefs
+                .edit()
+                .putInt(AppPreferenceKeys.KEY_DEFERRED_ARCHIVE_PROCESSED_BACKFILL_DB_VERSION, 12)
+                .apply()
+        }
+    }
+
+    /**
      * Sau khi trích nội dung từ WebView thành công (trang đã tải không lỗi): đánh dấu parse xong
      * và lưu URL trang kế nếu lấy được `href`; không lấy được `href` thì vẫn coi parse xong,
      * `online_next_page_url` để null.
@@ -1070,7 +1311,7 @@ class StoryLibraryRepository(private val context: Context) {
     }
 
     /** Nội dung file để ghép: bỏ dòng đầu nếu trùng tên file vật lý (vd. `story_12.txt`). */
-    private fun readStoryTextBodyForMerge(storyId: Long): String {
+    internal fun readStoryTextBodyForMerge(storyId: Long): String {
         val row = getStory(storyId) ?: return ""
         val raw = readStoryText(storyId).orEmpty()
         return stripLeadingFilenameLine(raw, row.filePath)
@@ -1646,8 +1887,8 @@ class StoryLibraryRepository(private val context: Context) {
         }
     }
 
-    /** Tạo bản ghi + file `story_{id}.txt` trong thư mục thể loại. */
-    fun insertStory(
+    /** Tạo bản ghi + file `story_{id}.txt` (metadata + nội dung). */
+    private fun insertStoryWithoutAutoSplit(
         categoryId: Long,
         title: String,
         body: String,
@@ -1684,6 +1925,151 @@ class StoryLibraryRepository(private val context: Context) {
         val upd = ContentValues().apply { put("file_path", file.absolutePath) }
         db.update("saved_stories", upd, "id = ?", arrayOf(id.toString()))
         return id
+    }
+
+    /** Tạo bản ghi + file `story_{id}.txt` trong thư mục thể loại. */
+    fun insertStory(
+        categoryId: Long,
+        title: String,
+        body: String,
+        importSourceUri: String? = null,
+        onlinePageUrl: String? = null,
+    ): Long {
+        val trimmedTitle = title.trim().ifEmpty { "Không tiêu đề" }
+        return insertStoryWithoutAutoSplit(
+            categoryId = categoryId,
+            title = trimmedTitle,
+            body = body,
+            importSourceUri = importSourceUri,
+            onlinePageUrl = onlinePageUrl,
+        )
+    }
+
+    private fun readerPrefsForLibrarySplit(): SharedPreferences =
+        context.applicationContext.getSharedPreferences(
+            AppPreferenceKeys.PREF_NAME,
+            Context.MODE_PRIVATE,
+        )
+
+    private fun configuredSentencesPerChapterForLibrarySplit(): Int =
+        readerPrefsForLibrarySplit()
+            .getInt(
+                AppPreferenceKeys.KEY_READER_VIEW_SENTENCES_PER_PAGE,
+                AppPreferenceKeys.DEFAULT_READER_VIEW_SENTENCES_PER_PAGE,
+            )
+            .coerceIn(1, 9999)
+
+    private fun canManualSentenceSplitLibraryRow(row: LibraryStoryRow): Boolean {
+        val u = row.onlinePageUrl?.trim()
+        if (u.isNullOrEmpty()) return true
+        return isDeferredArchiveLazyOnlineUrl(u)
+    }
+
+    /** Tách theo câu ([ParagraphTextService.parseStoredTextToSentences]), tối đa [n] câu mỗi chương; cần > [n] câu và ≥ 2 chunk. */
+    private fun computeLibrarySentenceSplitChunks(canon: String, n: Int): List<String>? {
+        if (n < 1) return null
+        val sentences =
+            try {
+                ParagraphTextService.parseStoredTextToSentences(canon)
+                    .map { ParagraphTextService.sanitizeParagraphText(it) }
+                    .filter { it.isNotEmpty() }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        if (sentences.size <= n) return null
+        val ch =
+            sentences
+                .chunked(n)
+                .map { mergeParagraphs(it).trim() }
+                .filter { it.isNotEmpty() }
+                .map { canonicalTextFromRaw(it) }
+        return if (ch.size >= 2) ch else null
+    }
+
+    /**
+     * Tách chương trong mutex — ghi đầu bằng [writeStoryTextBodyToDiskAndDb] (không qua [updateStoryText]).
+     */
+    private suspend fun applyLibrarySentenceChapterSplitInLock(
+        storyId: Long,
+        categoryId: Long,
+        displayTitle: String,
+    ) {
+        val row = getStory(storyId) ?: return
+        if (!canManualSentenceSplitLibraryRow(row)) return
+        val n = configuredSentencesPerChapterForLibrarySplit()
+        val raw = readStoryText(storyId)?.let { canonicalTextFromRaw(it) } ?: return
+        if (raw.isEmpty()) return
+        val chunks = computeLibrarySentenceSplitChunks(raw, n) ?: return
+        val headCanon = chunks.first()
+        val oldBm = row.lastSpeechSentenceIndex
+        val headParas =
+            try {
+                splitIntoParagraphs(headCanon)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        val maxIdx = headParas.size - 1
+        val clamped =
+            if (oldBm < 0) {
+                -1
+            } else {
+                oldBm.coerceAtMost(maxOf(0, maxIdx))
+            }
+        val fresh = getStory(storyId) ?: return
+        writeStoryTextBodyToDiskAndDb(storyId, fresh, headCanon)
+        updateLastSpeechSentenceIndex(storyId, clamped)
+        val titleBase = displayTitle.trim().ifEmpty { "Chương" }
+        val out = ArrayList<Long>()
+        for (i in 1 until chunks.size) {
+            val piece = chunks[i]
+            val t = suggestUniqueStoryTitle(categoryId, "$titleBase (${i + 1})")
+            out.add(
+                insertStoryWithoutAutoSplit(
+                    categoryId = categoryId,
+                    title = t,
+                    body = piece,
+                    importSourceUri = null,
+                    onlinePageUrl = null,
+                ),
+            )
+        }
+        val allIds = listStories(categoryId).map { it.id }
+        val withoutNew = allIds.filter { it !in out }
+        val sidPos = withoutNew.indexOf(storyId)
+        if (sidPos >= 0) {
+            val rebuilt = withoutNew.toMutableList()
+            var at = sidPos + 1
+            for (nid in out) {
+                rebuilt.add(at, nid)
+                at++
+            }
+            reorderStoriesDisplayOrder(categoryId, rebuilt)
+        }
+    }
+
+    /**
+     * Tách chương thư viện đang mở theo [AppPreferenceKeys.KEY_READER_VIEW_SENTENCES_PER_PAGE] (số câu mỗi khối khi tách thủ công).
+     * Chương web `http` không tách; chương local hoặc deferred archive (epub-lazy, …) thì được.
+     *
+     * @return `true` nếu đã tách thành ít nhất hai chương.
+     */
+    fun trySplitLibraryChapterByConfiguredSentenceCount(storyId: Long): Boolean {
+        val row = getStory(storyId) ?: return false
+        if (!canManualSentenceSplitLibraryRow(row)) return false
+        val canon = readStoryText(storyId)?.let { canonicalTextFromRaw(it) } ?: return false
+        if (canon.isEmpty()) return false
+        val n = configuredSentencesPerChapterForLibrarySplit()
+        if (computeLibrarySentenceSplitChunks(canon, n) == null) return false
+        runBlocking {
+            withDeferredArchiveWriteLock {
+                applyLibrarySentenceChapterSplitInLock(
+                    storyId = storyId,
+                    categoryId = row.categoryId,
+                    displayTitle = row.title.trim().ifEmpty { "Chương" },
+                )
+            }
+        }
+        return true
     }
 
     /**
@@ -2106,6 +2492,15 @@ class StoryLibraryRepository(private val context: Context) {
 
     fun deleteStory(storyId: Long) {
         val row = getStory(storyId) ?: return
+        if (row.onlineContentParseOk) {
+            val sk = deferredArchiveSourceKeyFromLazyOnlineUrl(row.onlinePageUrl) ?: ""
+            if (sk.isNotEmpty()) {
+                val idx = parseEightDigitDeferredArchiveStoryIndex1(row.title)
+                if (idx != null) {
+                    markDeferredArchiveItemProcessed(row.categoryId, sk, idx)
+                }
+            }
+        }
         row.importSourceUri?.trim()?.takeIf { it.isNotEmpty() }?.let { s ->
             runCatching {
                 context.contentResolver.releasePersistableUriPermission(
@@ -2114,8 +2509,11 @@ class StoryLibraryRepository(private val context: Context) {
                 )
             }
         }
+        deleteTtsAiStoryDownloadsStagingCopy(context, row.importSourceUri)
         runCatching { File(row.filePath).delete() }
+        val categoryId = row.categoryId
         helper.writableDatabase.delete("saved_stories", "id = ?", arrayOf(storyId.toString()))
+        maybeDeleteOrphanedTtsAiStoryArchiveExtractDir(categoryId)
     }
 
     companion object {

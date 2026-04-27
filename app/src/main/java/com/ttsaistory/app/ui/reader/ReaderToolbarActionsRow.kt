@@ -33,7 +33,8 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Cột nút công cụ tab nhập văn: xem/chỉnh sửa, phát, dừng, (truyện web) tải lại nội dung,
- * chương trước/sau trong truyện, chuyển truyện (thư viện), chương mới; một nút chuyển toàn văn / lưới câu khi đang chỉnh sửa. (Xuất AAC trên top bar.)
+ * hai mũi tên chương trước/sau trong thư viện, chuyển truyện, chương mới; nút toàn văn / lưới câu khi đang sửa.
+ * (Xuất AAC trên top bar.)
  */
 @Composable
 internal fun ReaderToolbarActionsColumn(

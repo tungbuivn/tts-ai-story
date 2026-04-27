@@ -190,7 +190,6 @@ object OnlineCategoryHeadlessStoryTextSync {
                     val canonical = flat.joinToString("\n")
                     // cập nhật canonical vào nội dung truyện , không gọi setChapterText để tránh đè vào chapter hiện tại
                     repository.updateStoryText(storyId, canonical)
-                 
                     repository.markOnlineStoryContentParseSuccess(storyId, nextUrl)
                     repository.ensureOnlineNextChapterStoryRow(
                         currentStoryId = storyId,

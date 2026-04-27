@@ -15,6 +15,8 @@ suspend fun persistInboundSharedTextToLibrary(
     raw: String,
     repo: StoryLibraryRepository,
     activeLibraryStoryId: Long? = null,
+    /** URI chuỗi của bản sao trong Download/tts-ai-story (sau [copyPickedDocumentToDownloadsTtsAiStoryFolder]) — xóa khi xóa chương. */
+    downloadsStagingSourceUri: String? = null,
 ): InboundLibraryPersistResult {
     val cleanedText =
         withContext(Dispatchers.Default) {
@@ -25,9 +27,16 @@ suspend fun persistInboundSharedTextToLibrary(
             val categoryId =
                 activeLibraryStoryId?.let { sid -> repo.getStory(sid)?.categoryId }
             if (categoryId != null) {
-                repo.importSharedTextIntoCategory(categoryId, cleanedText)
+                repo.importSharedTextIntoCategory(
+                    categoryId,
+                    cleanedText,
+                    importSourceUri = downloadsStagingSourceUri,
+                )
             } else {
-                repo.importInboundTextAsUntitledStory(cleanedText)
+                repo.importInboundTextAsUntitledStory(
+                    cleanedText,
+                    importSourceUri = downloadsStagingSourceUri,
+                )
             }
         }
     return InboundLibraryPersistResult(cleanedText, storyId, savedTitle)
@@ -41,6 +50,8 @@ suspend fun persistOpenedTextFileToLibrary(
     raw: String,
     repo: StoryLibraryRepository,
     displayName: String?,
+    /** URI chuỗi của bản sao trong Download/tts-ai-story — xóa khi xóa chương. */
+    downloadsStagingSourceUri: String? = null,
 ): InboundLibraryPersistResult {
     val cleanedText =
         withContext(Dispatchers.Default) {
@@ -56,7 +67,7 @@ suspend fun persistOpenedTextFileToLibrary(
         withContext(Dispatchers.IO) {
             val catId = repo.getOrCreateCategoryByName(categoryName)
             val title = storyTitle.ifBlank { categoryName }
-            val id = repo.insertStory(catId, title, cleanedText)
+            val id = repo.insertStory(catId, title, cleanedText, importSourceUri = downloadsStagingSourceUri)
             id to title
         }
     return InboundLibraryPersistResult(cleanedText, storyId, savedTitle)

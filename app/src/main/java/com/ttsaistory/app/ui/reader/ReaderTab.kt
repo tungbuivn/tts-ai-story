@@ -74,6 +74,7 @@ import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.elevenlabs.ElevenLabsPrefKeys
 import com.ttsaistory.app.ui.fonts.rememberReaderTabEditorAppearance
 import com.ttsaistory.app.domain.canonicalTextFromRaw
+import com.ttsaistory.app.domain.isDeferredArchiveLazyOnlineUrl
 import com.ttsaistory.app.domain.charOffsetForEditorFlatCellInMerged
 import com.ttsaistory.app.domain.editorUiFlatForTtsParagraphStartIndexForFlatCells
 import com.ttsaistory.app.domain.editorUiFlatToTtsParagraphStartIndex
@@ -109,7 +110,9 @@ import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.yield
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -176,6 +179,10 @@ fun ReaderTab(
     onSavedLibraryStory: (Long) -> Unit,
     /** Mở một truyện thư viện khác (đồng bộ tab Text / thư viện). */
     onOpenLibraryStory: suspend (Long) -> Boolean,
+    /** Tải lại chương lazy PDF/ZIP/EPUB (nạp lại cả chỉ số đứng trước biên import chỉ-tiến). */
+    onReloadDeferredArchiveStory: suspend (Long) -> Boolean,
+    /** Đọc lại nội dung chương [storyId] từ DB/file, cập nhật tab Text + epoch (vd. sau auto tách chương). */
+    onReloadLibraryChapterTextFromDisk: suspend (Long) -> Unit,
     /**
      * Đăng ký: xuất AAC, flush nháp, serializer thư viện, bottom bar — gom một object để tránh lệch slot Compose.
      */
@@ -198,7 +205,6 @@ fun ReaderTab(
     val flatItemCount = paragraphGroupFieldValues.sumOf { it.size }
     /** `last_speech_sentence_index` của chương thư viện đang mở (đọc từ DB). */
     var dbLastSpeechSentenceIndex0 by remember { mutableIntStateOf(-1) }
-    val paragraphSplitPageSize = AppEditorConstants.PARAGRAPH_SPLIT_PAGE_SIZE
     /** Đồng bộ với [ReaderService.totalItemCount] (cập nhật trong [splitIntoParagraphs] / parse). */
     val paragraphToolbarTtsTotal by readerService.totalItemCount.collectAsState(initial = null)
     var toolbarTtsSplitWorking by remember { mutableStateOf(false) }
@@ -305,6 +311,7 @@ fun ReaderTab(
             pendingPostNotifExport.value = null
         }
 
+    var showLibraryChapterSplitProgress by remember { mutableStateOf(false) }
     var showNewLibraryStoryDialog by remember { mutableStateOf(false) }
     var newStoryNewCategoryName by remember { mutableStateOf("") }
     var newStorySelectedCategoryId by remember { mutableStateOf<Long?>(null) }
@@ -322,6 +329,7 @@ fun ReaderTab(
     var moveStoryTitleDraft by remember { mutableStateOf("") }
     var textEditorChromeViewOnly by rememberSaveable { mutableStateOf(true) }
     var wasTextEditorChromeViewOnly by remember { mutableStateOf(textEditorChromeViewOnly) }
+    val paragraphSplitPageSize = AppEditorConstants.PARAGRAPH_SPLIT_PAGE_SIZE
     var webPrefetchChapterQueueLines by remember { mutableStateOf<List<String>>(emptyList()) }
     var webStoryQueueTargetStoryId by remember { mutableStateOf<Long?>(null) }
 
@@ -532,6 +540,8 @@ fun ReaderTab(
     val latestParagraphFieldGroups by rememberUpdatedState(paragraphGroupFieldValues)
     val latestOnTextChange by rememberUpdatedState(onTextChange)
     val latestParentText by rememberUpdatedState(text)
+    val latestOnLibraryDataChanged by rememberUpdatedState(onLibraryDataChanged)
+    val latestOnLibraryFileSynced by rememberUpdatedState(onLibraryFileSynced)
     val paragraphSplitEditSink = remember { ReaderParagraphSplitEditActionSink() }
     LaunchedEffect(readerService.paragraphSplitMode, textEditorChromeViewOnly) {
         if (!readerService.paragraphSplitMode) {
@@ -749,7 +759,8 @@ fun ReaderTab(
                     withContext(Dispatchers.IO) {
                         libraryRepository.updateStoryText(sid, headCanon)
                         libraryRepository.updateLastSpeechSentenceIndex(sid, clamped)
-                        val insertedId = libraryRepository.insertStory(catId, newTitle, tailCanon)
+                        val insertedId =
+                            libraryRepository.insertStory(catId, newTitle, tailCanon)
                         // Chèn chương mới ngay sau chương hiện tại: 1, 1_1, 2, 3...
                         val ordered = libraryRepository.listStories(catId).map { it.id }.toMutableList()
                         val newIdx = ordered.indexOf(insertedId)
@@ -764,6 +775,9 @@ fun ReaderTab(
                     }
                 withContext(Dispatchers.Main) {
                     onTextChange(tailCanon)
+                    withContext(Dispatchers.Default) {
+                        readerService.setChapterText(tailCanon)
+                    }
                     onSavedLibraryStory(newId)
                     onLibraryDataChanged()
                     Toast.makeText(
@@ -945,6 +959,9 @@ fun ReaderTab(
         val sid = activeLibraryStoryId ?: return@LaunchedEffect
         if (sid <= 0L) return@LaunchedEffect
         if (paragraphGroupFieldValues.sumOf { it.size } == 0) return@LaunchedEffect
+        // [librarySyncEpoch] vừa tăng nhưng lưới vẫn là snapshot epoch cũ (vd. reload sau auto tách chương):
+        // đừng ghi [ReaderService] từ lưới cũ — [LaunchedEffect(librarySyncEpoch)] sẽ setChapterText(từ parent) rồi rebuild lưới.
+        if (librarySyncEpoch != paragraphGridLastAppliedLibraryEpoch) return@LaunchedEffect
         val joined = joinedSplitCellLinesForChapterService(paragraphGroupFieldValues)
         withContext(Dispatchers.Default) {
             readerService.setChapterText(joined)
@@ -1245,6 +1262,21 @@ fun ReaderTab(
                 activeLibraryStoryId != null &&
                 (activeLibraryStoryId ?: 0L) > 0L &&
                 (paragraphToolbarTtsTotal?.let { it >= 2 } != false)
+        val autoBreakChapterEnabled =
+            readerService.paragraphSplitMode &&
+                !textEditorChromeViewOnly &&
+                flatItemCount > 0 &&
+                activeLibraryStoryId != null &&
+                (activeLibraryStoryId ?: 0L) > 0L &&
+                exportUiFromCoordinator == null
+        val joinCrossChapterHint =
+            if (readerService.paragraphSplitMode && !textEditorChromeViewOnly && flatItemCount > 0) {
+                val (m0, s0) = flatIndexToMainSub(paragraphGroupFieldValues, 0)
+                val t0 = paragraphGroupFieldValues.getOrNull(m0)?.getOrNull(s0)?.text.orEmpty()
+                "${libraryAdjacentNav?.first == true}|${sanitizeParagraphText(t0).isNotEmpty()}"
+            } else {
+                ""
+            }
         val bottomNavPublishKey =
             listOf(
                 readerService.paragraphSplitMode,
@@ -1262,7 +1294,9 @@ fun ReaderTab(
                 readerService.readerKeyboardForceHidden,
                 paragraphSplitCaseNextIsUpper,
                 breakPageEnabled,
+                autoBreakChapterEnabled,
                 activeLibraryStoryId?.toString() ?: "n",
+                joinCrossChapterHint,
             ).joinToString("|")
         if (bottomNavPublishKey == lastBottomNavPublishKey) {
             return@SideEffect
@@ -1280,7 +1314,25 @@ fun ReaderTab(
                     readerService.paragraphSplitMode &&
                         !textEditorChromeViewOnly &&
                         flatItemCount > 0 &&
-                        readerSplitFlatFocusIndex > 0,
+                        (
+                            readerSplitFlatFocusIndex > 0 ||
+                                (
+                                    readerSplitFlatFocusIndex == 0 &&
+                                        activeLibraryStoryId != null &&
+                                        (activeLibraryStoryId ?: 0L) > 0L &&
+                                        libraryAdjacentNav?.first == true &&
+                                        run {
+                                            val (m0, s0) = flatIndexToMainSub(paragraphGroupFieldValues, 0)
+                                            val t0 =
+                                                paragraphGroupFieldValues
+                                                    .getOrNull(m0)
+                                                    ?.getOrNull(s0)
+                                                    ?.text
+                                                    .orEmpty()
+                                            sanitizeParagraphText(t0).isNotEmpty()
+                                        }
+                                )
+                        ),
                 paragraphSplitEditDeleteEnabled =
                     if (readerService.paragraphSplitMode && !textEditorChromeViewOnly && flatItemCount > 0) {
                         val fi = readerSplitFlatFocusIndex.coerceIn(0, flatItemCount - 1)
@@ -1291,6 +1343,37 @@ fun ReaderTab(
                     },
                 paragraphSplitEditBreakPageEnabled = breakPageEnabled,
                 onParagraphSplitEditBreakPage = { breakChapterFromCurrentTtsToNewStory() },
+                paragraphSplitEditAutoBreakChapterEnabled = autoBreakChapterEnabled,
+                onParagraphSplitEditAutoBreakChapter = lambda@{
+                    keyboardController?.hide()
+                    val sid = activeLibraryStoryId ?: return@lambda
+                    scope.launch {
+                        showLibraryChapterSplitProgress = true
+                        try {
+                            val ok =
+                                withContext(Dispatchers.IO) {
+                                    libraryRepository.trySplitLibraryChapterByConfiguredSentenceCount(sid)
+                                }
+                            if (ok) {
+                                onReloadLibraryChapterTextFromDisk(sid)
+                                latestOnLibraryDataChanged()
+                                Toast.makeText(
+                                    ctx,
+                                    "Đã tách chương theo số câu / trang trong cài đặt.",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                Toast.makeText(
+                                    ctx,
+                                    "Không tách được (chương web, quá ít câu, hoặc không đủ để thành hai chương).",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        } finally {
+                            showLibraryChapterSplitProgress = false
+                        }
+                    }
+                },
                 paragraphSplitEditCaseNextIsUpper = paragraphSplitCaseNextIsUpper,
                 onParagraphSplitEditJoinUp = { paragraphSplitEditSink.joinUp() },
                 onParagraphSplitEditSplitAtCaret = { paragraphSplitEditSink.splitAtCaret() },
@@ -1604,6 +1687,7 @@ fun ReaderTab(
 
     LaunchedEffect(librarySyncEpoch) {
         if (librarySyncEpoch <= 0) return@LaunchedEffect
+        yield()
         toolbarTtsSplitWorking = false
         if (!readerService.paragraphSplitMode) {
             postMergeParagraphFocusFlatToRestore = null
@@ -1612,7 +1696,7 @@ fun ReaderTab(
         toolbarTtsSplitWorking = true
         persistDebouncer.job?.cancel()
         persistDebouncer.job = null
-        val snapshot = text
+        val snapshot = latestParentText
         val t0 =
             AnrDiagLog.begin(
                 "ReaderTab paragraphMainGroupsForEditor(librarySyncEpoch=$librarySyncEpoch) len=${snapshot.length}",
@@ -1622,7 +1706,7 @@ fun ReaderTab(
                 readerService.setChapterText(snapshot)
                 paragraphMainGroupsForEditor(readerService.chapterParagraphs.value)
             }
-        if (snapshot != text || !readerService.paragraphSplitMode) {
+        if (snapshot != latestParentText || !readerService.paragraphSplitMode) {
             AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor libSync CANCELLED", t0)
             toolbarTtsSplitWorking = false
             postMergeParagraphFocusFlatToRestore = null
@@ -1681,13 +1765,62 @@ fun ReaderTab(
         if (mergeRestoreFlat != null) {
             postMergeParagraphFocusFlatToRestore = null
             delay(120)
-            if (snapshot != text || !readerService.paragraphSplitMode) return@LaunchedEffect
+            if (snapshot != latestParentText || !readerService.paragraphSplitMode) return@LaunchedEffect
             val maxFlat = (newCellCount - 1).coerceAtLeast(0)
             if (maxFlat >= 0) {
                 val ui = mergeRestoreFlat.coerceIn(0, maxFlat)
                 persistLastReadingBookmarkFromEditorFieldFlat(paragraphGroupFieldValues, ui)
                 readerService.paragraphFocusRequestToken++
                 scrollParagraphLazyToGlobalFlat(ui, flatCountForPaging = newCellCount)
+            }
+        }
+    }
+
+    /**
+     * Mở chương từ thư viện / chuyển chương / bump [librarySyncEpoch]: hiển thị dialog cho tới khi
+     * luồng chia câu TTS xong (lưới câu: [toolbarTtsSplitWorking]; toàn văn: debounce + idle).
+     */
+    LaunchedEffect(librarySyncEpoch, activeLibraryStoryId) {
+        val sid = activeLibraryStoryId
+        if (librarySyncEpoch <= 0 || sid == null || sid <= 0L) {
+            readerService.setLibraryChapterLoadUiActive(false)
+            return@LaunchedEffect
+        }
+        val epochAtStart = librarySyncEpoch
+        readerService.setLibraryChapterLoadUiActive(true)
+        delay(1)
+        fun stillSameOpen(): Boolean =
+            activeLibraryStoryId == sid && librarySyncEpoch == epochAtStart
+        var finishedClean = false
+        try {
+            if (!stillSameOpen()) return@LaunchedEffect
+            if (latestParagraphSplit) {
+                withTimeoutOrNull(800L) {
+                    snapshotFlow { toolbarTtsSplitWorking }.first { it }
+                }
+                if (!stillSameOpen()) return@LaunchedEffect
+                withTimeoutOrNull(180_000L) {
+                    snapshotFlow { toolbarTtsSplitWorking }.first { !it }
+                }
+                if (!stillSameOpen()) return@LaunchedEffect
+                delay(AppEditorConstants.PLAY_TOOLBAR_SPLIT_DEBOUNCE_MS + 120L)
+                if (!stillSameOpen()) return@LaunchedEffect
+                withTimeoutOrNull(180_000L) {
+                    snapshotFlow { toolbarTtsSplitWorking }.first { !it }
+                }
+            } else {
+                delay(AppEditorConstants.PLAY_TOOLBAR_SPLIT_DEBOUNCE_MS + 40L)
+                if (!stillSameOpen()) return@LaunchedEffect
+                withTimeoutOrNull(180_000L) {
+                    snapshotFlow { toolbarTtsSplitWorking }.first { !it }
+                }
+            }
+            finishedClean = true
+        } catch (e: CancellationException) {
+            throw e
+        } finally {
+            if (finishedClean && activeLibraryStoryId == sid && librarySyncEpoch == epochAtStart) {
+                readerService.setLibraryChapterLoadUiActive(false)
             }
         }
     }
@@ -1706,9 +1839,10 @@ fun ReaderTab(
         ) {
             return@LaunchedEffect
         }
+        yield()
         persistDebouncer.job?.cancel()
         persistDebouncer.job = null
-        val snapshot = text
+        val snapshot = latestParentText
         val tParse =
             AnrDiagLog.begin(
                 "ReaderTab paragraphMainGroupsForEditor(splitMode+text) len=${snapshot.length}",
@@ -1718,7 +1852,7 @@ fun ReaderTab(
                 readerService.setChapterText(snapshot)
                 paragraphMainGroupsForEditor(readerService.chapterParagraphs.value)
             }
-        if (snapshot != text || !readerService.paragraphSplitMode) {
+        if (snapshot != latestParentText || !readerService.paragraphSplitMode) {
             AnrDiagLog.end("ReaderTab paragraphMainGroupsForEditor(splitMode+text) CANCELLED", tParse)
             return@LaunchedEffect
         }
@@ -1762,7 +1896,7 @@ fun ReaderTab(
         val merged =
             withContext(Dispatchers.Default) { mergeParagraphGridToStoredText(fieldRows) }
         AnrDiagLog.end("ReaderTab mergeParagraphGridToStoredText(Default) mergedLen=${merged.length}", tMerge)
-        if (snapshot != text || !readerService.paragraphSplitMode) return@LaunchedEffect
+        if (snapshot != latestParentText || !readerService.paragraphSplitMode) return@LaunchedEffect
         if (merged != text) {
             paragraphGroupFieldValues =
                 segs.map { row ->
@@ -1929,12 +2063,6 @@ fun ReaderTab(
                     val paras = splitIntoParagraphs(src)
                     val bookmark = dbLastSpeechSentenceIndex0
                     val maxP = (paras.size - 1).coerceAtLeast(0)
-                    val resumeIdx =
-                        if (bookmark >= 0) {
-                            bookmark.coerceIn(0, maxP)
-                        } else {
-                            0
-                        }
                     val localSelectedTtsIdx =
                         if (readerService.paragraphSplitMode) {
                             val groups = paragraphGroupFieldValues.map { row -> row.map { it.text } }
@@ -1948,7 +2076,17 @@ fun ReaderTab(
                         } else {
                             null
                         }
+                    // Có bookmark DB → chỉ số «tiếp tục đọc» cho menu. Không bookmark → ô đang chọn, rồi câu đầu.
+                    val resumeIdx =
+                        if (bookmark >= 0) {
+                            bookmark.coerceIn(0, maxP)
+                        } else if (localSelectedTtsIdx != null) {
+                            localSelectedTtsIdx.coerceIn(0, maxP)
+                        } else {
+                            0
+                        }
                     val hasLastSpeakingIndex = bookmark >= 0
+                    // Có cả last play DB và ô chọn: khác nhau → popup; trùng → phát luôn.
                     if (hasLastSpeakingIndex && localSelectedTtsIdx != null) {
                         if (localSelectedTtsIdx == resumeIdx) {
                             showPlayChoiceMenu = false
@@ -1996,13 +2134,45 @@ fun ReaderTab(
                     scope.launch {
                         webContentReloadWorking = true
                         try {
-                            OnlineCategoryHeadlessStoryTextSync.syncOnlineStoryFromWebPage(
-                                context = ctx,
-                                storyId = sid,
-                                repository = libraryRepository,
-                                bypassHttpCache = true,
-                                readerService = readerService,
-                            )
+                            val row =
+                                withContext(Dispatchers.IO) {
+                                    libraryRepository.getStory(sid)
+                                }
+                            if (row == null) {
+                                Toast.makeText(
+                                    ctx,
+                                    "Không tìm thấy chương trong thư viện.",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                return@launch
+                            }
+                            val pageUrl = row.onlinePageUrl?.trim().orEmpty()
+                            if (isDeferredArchiveLazyOnlineUrl(pageUrl)) {
+                                var ok = onReloadDeferredArchiveStory(sid)
+                                if (!ok) {
+                                    val again =
+                                        withContext(Dispatchers.IO) {
+                                            libraryRepository.getStory(sid)
+                                        }
+                                    ok = again?.onlineContentParseOk == true
+                                }
+                                if (!ok) {
+                                    Toast.makeText(
+                                        ctx,
+                                        "Không tải lại được nội dung từ PDF/ZIP/EPUB.",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                    return@launch
+                                }
+                            } else {
+                                OnlineCategoryHeadlessStoryTextSync.syncOnlineStoryFromWebPage(
+                                    context = ctx,
+                                    storyId = sid,
+                                    repository = libraryRepository,
+                                    bypassHttpCache = true,
+                                    readerService = readerService,
+                                )
+                            }
                             val body =
                                 withContext(Dispatchers.IO) {
                                     libraryRepository.readStoryText(sid)
@@ -2021,7 +2191,11 @@ fun ReaderTab(
                             onLibraryDataChanged()
                             Toast.makeText(
                                 ctx,
-                                "Đã tải lại nội dung từ web.",
+                                if (isDeferredArchiveLazyOnlineUrl(pageUrl)) {
+                                    "Đã tải lại nội dung từ file đã nhập (PDF/ZIP/EPUB)."
+                                } else {
+                                    "Đã tải lại nội dung từ web."
+                                },
                                 Toast.LENGTH_SHORT,
                             ).show()
                         } catch (e: CancellationException) {
@@ -2068,12 +2242,14 @@ fun ReaderTab(
                 onNavigatePrevLibraryStoryClick = {
                     keyboardController?.hide()
                     val sid = activeLibraryStoryId ?: return@ReaderToolbarActionsColumn
+                    readerService.setLibraryChapterLoadUiActive(true)
                     scope.launch {
                         val prev =
                             withContext(Dispatchers.IO) {
                                 libraryRepository.previousStoryInCategoryBefore(sid)
                             }
                         if (prev == null) {
+                            readerService.setLibraryChapterLoadUiActive(false)
                             Toast.makeText(
                                 ctx,
                                 "Không có chương trước trong truyện.",
@@ -2091,12 +2267,14 @@ fun ReaderTab(
                 onNavigateNextLibraryStoryClick = {
                     keyboardController?.hide()
                     val sid = activeLibraryStoryId ?: return@ReaderToolbarActionsColumn
+                    readerService.setLibraryChapterLoadUiActive(true)
                     scope.launch {
                         val next =
                             withContext(Dispatchers.IO) {
                                 libraryRepository.nextStoryInCategoryAfter(sid)
                             }
                         if (next == null) {
+                            readerService.setLibraryChapterLoadUiActive(false)
                             Toast.makeText(
                                 ctx,
                                 "Không có chương sau trong truyện.",
@@ -2152,6 +2330,9 @@ fun ReaderTab(
                     )
                 },
             )
+        }
+        if (showLibraryChapterSplitProgress) {
+            DialogReaderLibraryChapterSplitProgress()
         }
         if (showNewLibraryStoryDialog) {
             DialogReaderNewLibraryStory(
@@ -2481,15 +2662,106 @@ fun ReaderTab(
             SideEffect {
                 paragraphSplitEditSink.joinUp = {
                     keyboardController?.hide()
-                    val flat = readerSplitFlatFocusIndex
-                    if (flat > 0 &&
-                        !mergeParagraphBackward(flat, requireCaretAtStart = false)
-                    ) {
-                        Toast.makeText(
-                            ctx,
-                            "Không thể nối với câu trước.",
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                    val flat = readerSplitFlatFocusIndex.coerceIn(0, (flatItemCount - 1).coerceAtLeast(0))
+                    if (flat > 0) {
+                        if (!mergeParagraphBackward(flat, requireCaretAtStart = false)) {
+                            Toast.makeText(
+                                ctx,
+                                "Không thể nối với câu trước.",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    } else if (flat == 0) {
+                        val sid = activeLibraryStoryId
+                        if (sid == null || sid <= 0L || libraryAdjacentNav?.first != true) {
+                            Toast.makeText(
+                                ctx,
+                                "Không có chương trước để nối câu vào.",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        } else {
+                            scope.launch {
+                                try {
+                                    val prevId =
+                                        withContext(Dispatchers.IO) {
+                                            libraryRepository.previousStoryInCategoryBefore(sid)?.id
+                                        }
+                                    if (prevId == null) {
+                                        Toast.makeText(
+                                            ctx,
+                                            "Không có chương trước để nối câu vào.",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                        return@launch
+                                    }
+                                    val (m0, s0) = flatIndexToMainSub(paragraphGroupFieldValues, 0)
+                                    val firstSentenceRaw =
+                                        paragraphGroupFieldValues
+                                            .getOrNull(m0)
+                                            ?.getOrNull(s0)
+                                            ?.text
+                                            .orEmpty()
+                                    val firstSentence = canonicalTextFromRaw(firstSentenceRaw).trim()
+                                    if (firstSentence.isEmpty()) {
+                                        Toast.makeText(
+                                            ctx,
+                                            "Ô đầu trống — không có câu để nối.",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                        return@launch
+                                    }
+                                    withContext(Dispatchers.IO) {
+                                        val a = libraryRepository.readStoryTextBodyForMerge(prevId).trimEnd()
+                                        val b = firstSentence
+                                        val merged =
+                                            when {
+                                                a.isEmpty() -> b
+                                                b.isEmpty() -> a
+                                                else -> "$a\n\n$b"
+                                            }
+                                        libraryRepository.updateStoryText(
+                                            prevId,
+                                            canonicalTextFromRaw(merged),
+                                        )
+                                    }
+                                    val gl =
+                                        paragraphGroupFieldValues.map { it.toMutableList() }.toMutableList()
+                                    val (cm, cs) = flatIndexToMainSub(gl, 0)
+                                    if (cm !in gl.indices || cs !in gl[cm].indices) return@launch
+                                    val rowC = gl[cm].toMutableList()
+                                    rowC.removeAt(cs)
+                                    if (rowC.isEmpty()) {
+                                        gl.removeAt(cm)
+                                    } else {
+                                        gl[cm] = rowC
+                                    }
+                                    paragraphGroupFieldValues = compactParagraphGroupFieldValues(gl)
+                                    val newTotal = paragraphGroupFieldValues.sumOf { it.size }
+                                    val maxNew = (newTotal - 1).coerceAtLeast(0)
+                                    val newFlat = 0.coerceIn(0, maxNew)
+                                    persistLastReadingBookmarkFromEditorFieldFlat(
+                                        paragraphGroupFieldValues,
+                                        newFlat,
+                                    )
+                                    readerService.paragraphFocusRequestToken++
+                                    clampFlatFocus()
+                                    scrollParagraphLazyToGlobalFlat(
+                                        newFlat,
+                                        flatCountForPaging = newTotal,
+                                    )
+                                    scheduleDebouncedParagraphParentPersist()
+                                    onLibraryDataChanged()
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    Toast.makeText(
+                                        ctx,
+                                        e.message ?: "Không nối được vào chương trước.",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            }
+                        }
                     }
                 }
                 paragraphSplitEditSink.splitAtCaret = {
@@ -2601,6 +2873,7 @@ fun ReaderTab(
             if (readerService.paragraphSplitMode) flushParagraphParentPersist()
             libraryStoryPickerOpen = false
             libraryStoryPickerCategoryId = null
+            readerService.setLibraryChapterLoadUiActive(true)
             scope.launch {
                 onOpenLibraryStory(id)
             }
@@ -2650,6 +2923,7 @@ fun ReaderTab(
         onJoinStoryIntoPrevious = { appendFromId, targetId ->
             scope.launch {
                 val cid = libraryStoryPickerCategoryId ?: return@launch
+                readerService.setLibraryChapterLoadUiActive(true)
                 try {
                     if (readerService.paragraphSplitMode) flushParagraphParentPersist()
                     val bodyToPersist = serializedLibraryBodyNow()
@@ -2681,6 +2955,7 @@ fun ReaderTab(
                     // trỏ chương vừa xóa (append) khiến LaunchedEffect(AppTabs) gán active = null → mất prev/next & highlight.
                     val opened = onOpenLibraryStory(targetId)
                     if (!opened) {
+                        readerService.setLibraryChapterLoadUiActive(false)
                         Toast.makeText(
                             ctx,
                             "Không mở được chương đích sau ghép.",
@@ -2689,6 +2964,7 @@ fun ReaderTab(
                     }
                     onLibraryDataChanged()
                 } catch (e: Exception) {
+                    readerService.setLibraryChapterLoadUiActive(false)
                     postMergeParagraphFocusFlatToRestore = null
                     Toast.makeText(
                         ctx,

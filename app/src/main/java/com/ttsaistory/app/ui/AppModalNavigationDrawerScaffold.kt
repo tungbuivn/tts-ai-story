@@ -18,7 +18,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material.icons.outlined.FontDownload
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -58,6 +58,7 @@ import com.ttsaistory.app.ui.library.LibraryTab
 import com.ttsaistory.app.ui.reader.ExportM4aTopBarState
 import com.ttsaistory.app.ui.reader.MainBottomBar
 import com.ttsaistory.app.ui.reader.DialogReaderImeHideDelays
+import com.ttsaistory.app.ui.reader.DialogReaderLibraryChapterLoading
 import com.ttsaistory.app.ui.reader.ReaderTab
 import com.ttsaistory.app.ui.reader.ReaderService
 import com.ttsaistory.app.ui.reader.ReaderBottomNavBridge
@@ -114,6 +115,10 @@ fun AppModalNavigationDrawerScaffold(
     systemTtsSpeechRate: Float,
     systemTtsPitch: Float,
     onOpenStoryFromLibrary: suspend (Long) -> Boolean,
+    /** Tải lại nội dung chương lazy PDF/ZIP/EPUB (cho phép nạp lại chỉ số «phía sau» biên đã import). */
+    onReloadDeferredArchiveStory: suspend (Long) -> Boolean,
+    /** Đọc lại nội dung chương từ DB (sau tách chương / đồng bộ file). */
+    onReloadLibraryChapterTextFromDisk: suspend (Long) -> Unit,
     /** Mở file văn bản qua SAF (bộ nhớ / thẻ SD). */
     onOpenTextFileFromStorage: () -> Unit,
     /** Tab Thư viện: mở SAF chọn thư mục để import thành các chương trong một truyện. */
@@ -129,7 +134,7 @@ fun AppModalNavigationDrawerScaffold(
     val drawerBase = lerp(scheme.primaryContainer, scheme.surfaceContainerLow, 0.22f)
     val drawerHeaderGradientEnd = lerp(scheme.primary.copy(alpha = 0.14f), drawerBase, 0.55f)
     var showAboutDialog by remember { mutableStateOf(false) }
-    var showReaderImeHideDelaysDialog by remember { mutableStateOf(false) }
+    var showReaderSettingsDialog by remember { mutableStateOf(false) }
     var showDrawerOnlineDomainParserManage by remember { mutableStateOf(false) }
 
     ModalNavigationDrawer(
@@ -270,14 +275,14 @@ fun AppModalNavigationDrawerScaffold(
                 )
                 NavigationDrawerItem(
                     icon = {
-                        Icon(Icons.Outlined.Timer, contentDescription = null)
+                        Icon(Icons.Outlined.Tune, contentDescription = null)
                     },
-                    label = { Text("Độ trễ ẩn bàn phím") },
+                    label = { Text("Cài đặt") },
                     selected = false,
                     onClick = {
                         coroutineScope.launch {
                             drawerState.close()
-                            showReaderImeHideDelaysDialog = true
+                            showReaderSettingsDialog = true
                         }
                     },
                 )
@@ -419,6 +424,8 @@ fun AppModalNavigationDrawerScaffold(
                                 onLibraryDataChanged = onLibraryDataChanged,
                                 onSavedLibraryStory = onSavedLibraryStoryFromEditor,
                                 onOpenLibraryStory = onOpenStoryFromLibrary,
+                                onReloadDeferredArchiveStory = onReloadDeferredArchiveStory,
+                                onReloadLibraryChapterTextFromDisk = onReloadLibraryChapterTextFromDisk,
                                 registrationCallbacks =
                                     ReaderTabRegistrationCallbacks(
                                         onRegisterExportM4aForTopBar =
@@ -440,6 +447,12 @@ fun AppModalNavigationDrawerScaffold(
                                 toolbarCommand = libraryToolbarCommand,
                                 onToolbarCommandConsumed = onLibraryToolbarCommandConsumed,
                                 activeEditingStoryId = activeLibraryStoryId,
+                                onBeginOpenStoryFromLibraryTap = {
+                                    readerService.setLibraryChapterLoadUiActive(true)
+                                },
+                                onAbortOpenStoryFromLibraryTap = {
+                                    readerService.setLibraryChapterLoadUiActive(false)
+                                },
                                 onLibraryChanged = onLibraryChanged,
                                 onOpenStory = onOpenStoryFromLibrary,
                                 postLibraryFolderImportProgress = postLibraryFolderImportProgress,
@@ -450,6 +463,11 @@ fun AppModalNavigationDrawerScaffold(
         }
     }
 
+    /** Bọc ngoài tab — ReaderTab có thể unmount khi sang Thư viện; dialog vẫn hiện theo [ReaderService.libraryChapterLoadUiActive]. */
+    if (readerService.libraryChapterLoadUiActive) {
+        DialogReaderLibraryChapterLoading()
+    }
+
     if (showDrawerOnlineDomainParserManage) {
         DialogOnlineDomainParsersManage(
             repository = storyLibrary,
@@ -458,9 +476,9 @@ fun AppModalNavigationDrawerScaffold(
         )
     }
 
-    if (showReaderImeHideDelaysDialog) {
+    if (showReaderSettingsDialog) {
         DialogReaderImeHideDelays(
-            onDismissRequest = { showReaderImeHideDelaysDialog = false },
+            onDismissRequest = { showReaderSettingsDialog = false },
             prefs = prefs,
         )
     }

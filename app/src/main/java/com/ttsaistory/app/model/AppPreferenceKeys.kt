@@ -13,6 +13,12 @@ object AppPreferenceKeys {
     const val KEY_ACTIVE_LIBRARY_STORY_ID = "active_library_story_id"
 
     /**
+     * Phiên bản schema DB đã chạy backfill bảng `deferred_archive_processed_items` (đánh dấu chương
+     * deferred đã nạp để xóa chương không kéo nạp lại). 0 = chưa chạy.
+     */
+    const val KEY_DEFERRED_ARCHIVE_PROCESSED_BACKFILL_DB_VERSION = "deferred_archive_processed_backfill_db_version"
+
+    /**
      * Tab Text: khi `true`, luôn ẩn bàn phím mềm (SOFT_INPUT_STATE_ALWAYS_HIDDEN).
      * Mặc định nếu chưa lưu pref: `false` — bàn phím hiện bình thường.
      */
@@ -25,6 +31,12 @@ object AppPreferenceKeys {
 
     const val DEFAULT_READER_IME_HIDE_DELAY_FIRST_MS = 20
     const val DEFAULT_READER_IME_HIDE_DELAY_SECOND_MS = 80
+
+    /**
+     * Số câu mỗi khối khi dùng nút **tách chương thủ công** (thư viện) — không còn dùng để phân trang lưới xem/sửa.
+     */
+    const val KEY_READER_VIEW_SENTENCES_PER_PAGE = "reader_view_sentences_per_page"
+    const val DEFAULT_READER_VIEW_SENTENCES_PER_PAGE = 50
 
     const val DEFAULT_EDITOR_FONT_SCAN_DIR = "/storage/emulated/0/fonts"
 

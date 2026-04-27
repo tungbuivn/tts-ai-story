@@ -5,9 +5,11 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 
 private const val STAGING_FOLDER_SEGMENT = "tts-ai-story"
 
@@ -108,4 +110,43 @@ fun copyPickedDocumentToDownloadsTtsAiStoryFolder(
     } ?: error("Không đọc được file đã chọn")
     @Suppress("DEPRECATION")
     return Uri.fromFile(outFile)
+}
+
+/**
+ * Xóa bản sao trong **Download/tts-ai-story** do [copyPickedDocumentToDownloadsTtsAiStoryFolder] tạo,
+ * khi [importSourceUri] trỏ tới đúng file đó (MediaStore `RELATIVE_PATH` = `Download/tts-ai-story`,
+ * hoặc `file://` trực tiếp trong thư mục đó — không xóa URI cây SAF, không xóa file trong thư mục con như xuất thư viện).
+ */
+fun deleteTtsAiStoryDownloadsStagingCopy(context: Context, importSourceUri: String?) {
+    val s = importSourceUri?.trim()?.takeIf { it.isNotEmpty() } ?: return
+    val uri = runCatching { Uri.parse(s) }.getOrNull() ?: return
+    if (DocumentsContract.isTreeUri(uri)) return
+    val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return
+    if (scheme == "content") {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val rel =
+                context.contentResolver.query(
+                    uri,
+                    arrayOf(MediaStore.MediaColumns.RELATIVE_PATH),
+                    null,
+                    null,
+                    null,
+                )?.use { c ->
+                    if (c.moveToFirst()) c.getString(0)?.trim() else null
+                } ?: return
+            val normalized = rel.trimEnd('/').lowercase(Locale.ROOT)
+            val expected = stagingRelativePath.trimEnd('/').lowercase(Locale.ROOT)
+            if (normalized != expected) return
+            runCatching { context.contentResolver.delete(uri, null, null) }
+        }
+        return
+    }
+    if (scheme != "file") return
+    val path = uri.path ?: return
+    val f = File(path)
+    val parent = f.parentFile ?: return
+    if (!parent.name.equals(STAGING_FOLDER_SEGMENT, ignoreCase = true)) return
+    val grand = parent.parentFile ?: return
+    if (!grand.name.equals(Environment.DIRECTORY_DOWNLOADS, ignoreCase = true)) return
+    runCatching { f.delete() }
 }
