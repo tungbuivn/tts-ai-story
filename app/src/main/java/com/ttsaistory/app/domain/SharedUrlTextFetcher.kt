@@ -91,11 +91,7 @@ suspend fun fetchUrlAsPlainText(urlString: String): String =
         conn.connectTimeout = 15_000
         conn.readTimeout = 45_000
         conn.instanceFollowRedirects = true
-        conn.setRequestProperty(
-            "User-Agent",
-            "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 TTS-AI-Story/1.0",
-        )
+        conn.setRequestProperty("User-Agent", CHROME_MOBILE_WEB_USER_AGENT)
         conn.setRequestProperty("Accept", "text/html,text/plain;q=0.9,*/*;q=0.8")
         conn.connect()
         val code = conn.responseCode

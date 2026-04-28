@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.ttsaistory.app.data.LibraryCategoryRow
+import com.ttsaistory.app.data.looksLikeWebCategoryUrl
 import com.ttsaistory.app.ui.core.CancelButton
 
 @Composable
@@ -43,6 +44,7 @@ internal fun DialogReaderNewLibraryStory(
     onConfirmCreateClick: () -> Unit,
 ) {
     val ctx = LocalContext.current
+    val asUrl = looksLikeWebCategoryUrl(newCategoryNameDraft)
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text("Chương mới") },
@@ -112,7 +114,20 @@ internal fun DialogReaderNewLibraryStory(
                 OutlinedTextField(
                     value = newCategoryNameDraft,
                     onValueChange = onNewCategoryNameDraftChange,
-                    label = { Text("Hoặc truyện mới (ưu tiên)") },
+                    label = {
+                        Text(if (asUrl) "URL trang (https://…)" else "Hoặc tên truyện mới (ưu tiên)")
+                    },
+                    supportingText =
+                        if (asUrl) {
+                            {
+                                Text(
+                                    "Nhận diện URL — tạo thể loại online + mở chương đầu. Không phải URL → thể loại thường.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        } else {
+                            null
+                        },
                     singleLine = true,
                     trailingIcon = {
                         IconButton(

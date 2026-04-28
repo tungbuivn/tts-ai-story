@@ -80,7 +80,7 @@ internal fun AppMainTopAppBar(
             ),
         actions = {
             if (tabIndex == 0) {
-                if (readerService.deferredFetchHasRemaining) {
+                if (readerService.deferredFetchHasRemaining || readerService.webForwardPrefetchHasRemaining) {
                     val fetchEnabled = readerService.deferredFetchContinueEnabled
                     val fetchWorking = readerService.deferredFetchWorking
                     val fetchSpinTransition = rememberInfiniteTransition(label = "fetch-spin")

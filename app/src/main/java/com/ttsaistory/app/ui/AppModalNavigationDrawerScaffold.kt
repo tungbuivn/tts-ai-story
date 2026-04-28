@@ -115,8 +115,6 @@ fun AppModalNavigationDrawerScaffold(
     systemTtsSpeechRate: Float,
     systemTtsPitch: Float,
     onOpenStoryFromLibrary: suspend (Long) -> Boolean,
-    /** Tải lại nội dung chương lazy PDF/ZIP/EPUB (cho phép nạp lại chỉ số «phía sau» biên đã import). */
-    onReloadDeferredArchiveStory: suspend (Long) -> Boolean,
     /** Đọc lại nội dung chương từ DB (sau tách chương / đồng bộ file). */
     onReloadLibraryChapterTextFromDisk: suspend (Long) -> Unit,
     /** Mở file văn bản qua SAF (bộ nhớ / thẻ SD). */
@@ -424,7 +422,6 @@ fun AppModalNavigationDrawerScaffold(
                                 onLibraryDataChanged = onLibraryDataChanged,
                                 onSavedLibraryStory = onSavedLibraryStoryFromEditor,
                                 onOpenLibraryStory = onOpenStoryFromLibrary,
-                                onReloadDeferredArchiveStory = onReloadDeferredArchiveStory,
                                 onReloadLibraryChapterTextFromDisk = onReloadLibraryChapterTextFromDisk,
                                 registrationCallbacks =
                                     ReaderTabRegistrationCallbacks(

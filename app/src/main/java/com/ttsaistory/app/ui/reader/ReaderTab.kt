@@ -69,6 +69,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.ttsaistory.app.AnrDiagLog
 import com.ttsaistory.app.data.LibraryCategoryRow
+import com.ttsaistory.app.data.looksLikeWebCategoryUrl
 import com.ttsaistory.app.data.LibraryStoryRow
 import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.elevenlabs.ElevenLabsPrefKeys
@@ -179,8 +180,6 @@ fun ReaderTab(
     onSavedLibraryStory: (Long) -> Unit,
     /** Mở một truyện thư viện khác (đồng bộ tab Text / thư viện). */
     onOpenLibraryStory: suspend (Long) -> Boolean,
-    /** Tải lại chương lazy PDF/ZIP/EPUB (nạp lại cả chỉ số đứng trước biên import chỉ-tiến). */
-    onReloadDeferredArchiveStory: suspend (Long) -> Boolean,
     /** Đọc lại nội dung chương [storyId] từ DB/file, cập nhật tab Text + epoch (vd. sau auto tách chương). */
     onReloadLibraryChapterTextFromDisk: suspend (Long) -> Unit,
     /**
@@ -282,8 +281,8 @@ fun ReaderTab(
         }
         val triple =
             withContext(Dispatchers.IO) {
-                val web =
-                    libraryRepository.getStory(sid)?.onlinePageUrl?.trim()?.isNotEmpty() == true
+                val url = libraryRepository.getStory(sid)?.onlinePageUrl?.trim().orEmpty()
+                val web = url.isNotEmpty() && !isDeferredArchiveLazyOnlineUrl(url)
                 val hasPrev = libraryRepository.previousStoryInCategoryBefore(sid) != null
                 val hasNext = libraryRepository.nextStoryInCategoryAfter(sid) != null
                 Triple(web, hasPrev, hasNext)
@@ -2113,34 +2112,13 @@ fun ReaderTab(
                                 ).show()
                                 return@launch
                             }
-                            val pageUrl = row.onlinePageUrl?.trim().orEmpty()
-                            if (isDeferredArchiveLazyOnlineUrl(pageUrl)) {
-                                var ok = onReloadDeferredArchiveStory(sid)
-                                if (!ok) {
-                                    val again =
-                                        withContext(Dispatchers.IO) {
-                                            libraryRepository.getStory(sid)
-                                        }
-                                    ok = again?.onlineContentParseOk == true
-                                }
-                                if (!ok) {
-                                    readerService.setLibraryChapterLoadUiActive(false)
-                                    Toast.makeText(
-                                        ctx,
-                                        "Không tải lại được nội dung từ PDF/ZIP/EPUB.",
-                                        Toast.LENGTH_LONG,
-                                    ).show()
-                                    return@launch
-                                }
-                            } else {
-                                OnlineCategoryHeadlessStoryTextSync.syncOnlineStoryFromWebPage(
-                                    context = ctx,
-                                    storyId = sid,
-                                    repository = libraryRepository,
-                                    bypassHttpCache = true,
-                                    readerService = readerService,
-                                )
-                            }
+                            OnlineCategoryHeadlessStoryTextSync.syncOnlineStoryFromWebPage(
+                                context = ctx,
+                                storyId = sid,
+                                repository = libraryRepository,
+                                bypassHttpCache = true,
+                                readerService = readerService,
+                            )
                             val body =
                                 withContext(Dispatchers.IO) {
                                     libraryRepository.readStoryText(sid)
@@ -2160,11 +2138,7 @@ fun ReaderTab(
                             onLibraryDataChanged()
                             Toast.makeText(
                                 ctx,
-                                if (isDeferredArchiveLazyOnlineUrl(pageUrl)) {
-                                    "Đã tải lại nội dung từ file đã nhập (PDF/ZIP/EPUB)."
-                                } else {
-                                    "Đã tải lại nội dung từ web."
-                                },
+                                "Đã tải lại nội dung từ web.",
                                 Toast.LENGTH_SHORT,
                             ).show()
                         } catch (e: CancellationException) {
@@ -2315,12 +2289,19 @@ fun ReaderTab(
                 onConfirmCreateClick = {
                     scope.launch {
                         try {
-                            val catId =
-                                if (newStoryNewCategoryName.isNotBlank()) {
-                                    withContext(Dispatchers.IO) {
-                                        libraryRepository.insertCategory(
-                                            newStoryNewCategoryName.trim(),
-                                        )
+                            val trimmed = newStoryNewCategoryName.trim()
+                            val onlineWeb =
+                                trimmed.isNotEmpty() && looksLikeWebCategoryUrl(trimmed)
+                            val catId: Long =
+                                if (trimmed.isNotEmpty()) {
+                                    if (onlineWeb) {
+                                        withContext(Dispatchers.IO) {
+                                            libraryRepository.insertOnlineLibraryCategory(trimmed).first
+                                        }
+                                    } else {
+                                        withContext(Dispatchers.IO) {
+                                            libraryRepository.insertCategory(trimmed)
+                                        }
                                     }
                                 } else {
                                     newStorySelectedCategoryId
@@ -2333,24 +2314,39 @@ fun ReaderTab(
                                             return@launch
                                         }
                                 }
-                            val title =
-                                withContext(Dispatchers.IO) {
-                                    val n =
-                                        libraryRepository.nextUntitledInboundStorySuffix(
-                                            catId,
-                                        )
-                                    "không tên $n"
+                            val newId: Long =
+                                if (trimmed.isNotEmpty() && onlineWeb) {
+                                    withContext(Dispatchers.IO) {
+                                        libraryRepository.listStories(catId).firstOrNull()?.id
+                                            ?: error("Thiếu chương sau khi tạo truyện online")
+                                    }
+                                } else {
+                                    val title =
+                                        withContext(Dispatchers.IO) {
+                                            val n =
+                                                libraryRepository.nextUntitledInboundStorySuffix(
+                                                    catId,
+                                                )
+                                            "không tên $n"
+                                        }
+                                    withContext(Dispatchers.IO) {
+                                        libraryRepository.insertStory(catId, title, "")
+                                    }
                                 }
-                            val newId =
+                            val body =
                                 withContext(Dispatchers.IO) {
-                                    libraryRepository.insertStory(catId, title, "")
+                                    libraryRepository.readStoryText(newId).orEmpty()
                                 }
                             onSavedLibraryStory(newId)
-                            onTextChange(canonicalTextFromRaw(""))
+                            onTextChange(canonicalTextFromRaw(body))
                             onLibraryDataChanged()
                             Toast.makeText(
                                 ctx,
-                                "Đã tạo: $title",
+                                if (trimmed.isNotEmpty() && onlineWeb) {
+                                    "Đã tạo truyện online và mở chương đầu"
+                                } else {
+                                    "Đã tạo chương mới"
+                                },
                                 Toast.LENGTH_SHORT,
                             ).show()
                             showNewLibraryStoryDialog = false

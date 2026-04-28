@@ -25,7 +25,7 @@ internal fun DialogLibraryNewCategory(
     onDismissRequest: () -> Unit,
     /**
      * [trimmedName] đã trim, không rỗng.
-     * [treatAsOnlineWebCategory] true khi nhận diện URL — tạo truyện online; selector theo domain từ DB (menu Parser online).
+     * [treatAsOnlineWebCategory] = [looksLikeWebCategoryUrl](trimmedName) — URL → truyện online, text thường → thể loại thường.
      */
     onConfirmCreate: (trimmedName: String, treatAsOnlineWebCategory: Boolean) -> Unit,
 ) {
@@ -40,13 +40,16 @@ internal fun DialogLibraryNewCategory(
                 value = categoryNameDraft,
                 onValueChange = onCategoryNameDraftChange,
                 label = { Text(if (asUrl) "URL hoặc tên" else "Tên") },
-                supportingText = {
+                supportingText =
                     if (asUrl) {
-                        Text(
-                            "Nhận diện URL — tạo truyện online. Cấu hình selector theo domain trong menu ☰ → Cấu hình Parser online.",
-                        )
-                    }
-                },
+                        {
+                            Text(
+                                "Nhận diện URL — tạo truyện online. Text không phải URL → thể loại thường. Parser: ☰ → Cấu hình Parser online.",
+                            )
+                        }
+                    } else {
+                        null
+                    },
                 singleLine = true,
                 trailingIcon = {
                     IconButton(
@@ -79,7 +82,9 @@ internal fun DialogLibraryNewCategory(
             Button(
                 onClick = {
                     val n = categoryNameDraft.trim()
-                    if (n.isNotEmpty()) onConfirmCreate(n, looksLikeWebCategoryUrl(n))
+                    if (n.isNotEmpty()) {
+                        onConfirmCreate(n, looksLikeWebCategoryUrl(n))
+                    }
                 },
             ) {
                 Text("Tạo")

@@ -112,6 +112,8 @@ class ReaderService(prefs: SharedPreferences) {
 
     /** Có nguồn deferred (pdf/zip/epub lazy) và vẫn còn item chưa nạp hết. */
     var deferredFetchHasRemaining: Boolean by mutableStateOf(false)
+    /** Còn chương web (http/https) trong chuỗi next-page chưa sync — nút Continue fetch (cùng deferred). */
+    var webForwardPrefetchHasRemaining: Boolean by mutableStateOf(false)
     /** User bật/tắt continue fetch nền cho deferred source. */
     var deferredFetchContinueEnabled: Boolean by mutableStateOf(false)
     /** Worker continue fetch đang chạy nền. */

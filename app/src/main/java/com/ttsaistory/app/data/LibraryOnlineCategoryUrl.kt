@@ -10,14 +10,23 @@ fun normalizeWebCategoryUrl(input: String): String {
     return if (t.contains("://", ignoreCase = true)) t else "https://$t"
 }
 
-/** true nếu sau khi chuẩn hóa là http(s) và có host. */
-fun looksLikeWebCategoryUrl(input: String): Boolean {
-    val normalized = normalizeWebCategoryUrl(input.trim())
-    if (normalized.isEmpty()) return false
-    val uri = Uri.parse(normalized)
+private fun uriHasHttpOrHttpsHost(url: String): Boolean {
+    val t = url.trim()
+    if (t.isEmpty()) return false
+    val uri = Uri.parse(t)
     val scheme = uri.scheme?.lowercase() ?: return false
     if (scheme != "http" && scheme != "https") return false
     return !uri.host.isNullOrBlank()
+}
+
+/**
+ * true chỉ khi người dùng nhập rõ tiền tố https:// (không tự thêm scheme): tránh tên thể loại dạng host
+ * bị nhầm thành truyện online.
+ */
+fun looksLikeWebCategoryUrl(input: String): Boolean {
+    val t = input.trim()
+    if (!t.startsWith("https://", ignoreCase = true)) return false
+    return uriHasHttpOrHttpsHost(t)
 }
 
 /** So khớp hai URL trang truyện online (chuẩn hóa nhẹ, bỏ fragment). */
@@ -29,7 +38,7 @@ fun normalizedOnlineParserDomainKey(input: String): String? {
     val t = input.trim()
     if (t.isEmpty()) return null
     val candidate = normalizeWebCategoryUrl(t)
-    if (!looksLikeWebCategoryUrl(t) && !looksLikeWebCategoryUrl(candidate)) return null
+    if (!uriHasHttpOrHttpsHost(t) && !uriHasHttpOrHttpsHost(candidate)) return null
     val uri = Uri.parse(candidate)
     val host = uri.host?.trim()?.lowercase(Locale.ROOT) ?: return null
     if (host.isEmpty()) return null

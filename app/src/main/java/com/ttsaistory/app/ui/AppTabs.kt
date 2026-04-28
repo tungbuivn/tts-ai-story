@@ -92,6 +92,7 @@ import com.ttsaistory.app.model.TextTabSpeechEngine
 import com.ttsaistory.app.ui.library.OpenFileProgressDialog
 import com.ttsaistory.app.ui.library.OpenFileProgressLogDialog
 import com.ttsaistory.app.ui.library.OnlineCategoryHeadlessStoryTextSync
+import com.ttsaistory.app.ui.library.OnlineWebStoryViewAheadPreload
 import com.ttsaistory.app.ui.library.OpenFileProgressLogUi
 import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.fonts.EditorFontConfigDialog
@@ -1049,12 +1050,14 @@ fun AppTabs() {
         if (tabIndex != 0) {
             readerService.deferredFetchWorking = false
             readerService.deferredFetchProgressLabel = ""
+            readerService.webForwardPrefetchHasRemaining = false
             return@LaunchedEffect
         }
         val sid = activeLibraryStoryId
         if (sid == null) {
             readerService.deferredFetchWorking = false
             readerService.deferredFetchHasRemaining = false
+            readerService.webForwardPrefetchHasRemaining = false
             readerService.deferredFetchProgressLabel = ""
             return@LaunchedEffect
         }
@@ -1073,33 +1076,52 @@ fun AppTabs() {
                 )
             }
         readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
+        readerService.webForwardPrefetchHasRemaining =
+            withContext(Dispatchers.IO) {
+                OnlineWebStoryViewAheadPreload.hasWebForwardPrefetchAnyRemainingForTopBar(
+                    storyLibrary,
+                    sid,
+                )
+            }
         // Xong batch hiện tại thì ẩn nhãn; «continue fetch» lo các batch tiếp theo.
         readerService.deferredFetchProgressLabel = ""
         if (result.changed) {
             libraryRefreshTrigger++
         }
         readerService.deferredFetchWorking = false
-        if (!readerService.deferredFetchHasRemaining) {
+        if (!readerService.deferredFetchHasRemaining && !readerService.webForwardPrefetchHasRemaining) {
             readerService.deferredFetchProgressLabel = ""
         }
+    }
+    /** Sau preload ReaderTab / đổi DB: cập nhật lại cờ nút fetch-all (không chạy lại batch deferred). */
+    LaunchedEffect(activeLibraryStoryId, tabIndex, libraryRefreshTrigger) {
+        if (tabIndex != 0) return@LaunchedEffect
+        val sid = activeLibraryStoryId ?: return@LaunchedEffect
+        readerService.webForwardPrefetchHasRemaining =
+            withContext(Dispatchers.IO) {
+                OnlineWebStoryViewAheadPreload.hasWebForwardPrefetchAnyRemainingForTopBar(
+                    storyLibrary,
+                    sid,
+                )
+            }
     }
     LaunchedEffect(activeLibraryStoryId, tabIndex, readerService.deferredFetchContinueEnabled) {
         if (tabIndex != 0 || !readerService.deferredFetchContinueEnabled) {
             readerService.deferredFetchWorking = false
-            if (!readerService.deferredFetchHasRemaining) {
+            if (!readerService.deferredFetchHasRemaining && !readerService.webForwardPrefetchHasRemaining) {
                 readerService.deferredFetchProgressLabel = ""
             }
             return@LaunchedEffect
         }
-        val sid = activeLibraryStoryId ?: return@LaunchedEffect
         while (readerService.deferredFetchContinueEnabled && tabIndex == 0) {
+            val sidLoop = activeLibraryStoryId ?: break
             readerService.deferredFetchWorking = true
             val result =
                 withContext(Dispatchers.IO) {
                     ensureDeferredPrefetchWindowFromCurrentStory(
                         storyLibrary = storyLibrary,
                         readerService = readerService,
-                        currentStoryId = sid,
+                        currentStoryId = sidLoop,
                         startFromFirstPending = true,
                         onProcessingItem = { source, idx ->
                             readerService.deferredFetchProgressLabel =
@@ -1108,12 +1130,46 @@ fun AppTabs() {
                     )
                 }
             readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
-            // Xong queue vòng hiện tại thì ẩn nhãn; không giữ trạng thái "đang nạp" khi không còn item đang chạy.
             readerService.deferredFetchProgressLabel = ""
             if (result.changed) {
                 libraryRefreshTrigger++
             }
-            if (!readerService.deferredFetchHasRemaining) {
+            readerService.webForwardPrefetchHasRemaining =
+                withContext(Dispatchers.IO) {
+                    OnlineWebStoryViewAheadPreload.hasWebForwardPrefetchAnyRemainingForTopBar(
+                        storyLibrary,
+                        sidLoop,
+                    )
+                }
+            if (!readerService.deferredFetchHasRemaining && readerService.webForwardPrefetchHasRemaining) {
+                readerService.deferredFetchProgressLabel = "Web …"
+                try {
+                    OnlineWebStoryViewAheadPreload.preloadNextTenWhileViewing(
+                        context = context.applicationContext,
+                        anchorLibraryStoryId = sidLoop,
+                        repository = storyLibrary,
+                        readerService = readerService,
+                        onLibraryDataChanged = { libraryRefreshTrigger++ },
+                        onQueueTargetStoryId = { tid ->
+                            readerService.deferredFetchProgressLabel =
+                                if (tid != null) "Web id=$tid" else ""
+                        },
+                        crawlEntireForwardChain = true,
+                        maxWebSyncRoundsPerRun = OnlineWebStoryViewAheadPreload.VIEW_AHEAD_NEXT_CHAPTER_LIMIT,
+                    )
+                } finally {
+                    readerService.deferredFetchProgressLabel = ""
+                }
+                libraryRefreshTrigger++
+                readerService.webForwardPrefetchHasRemaining =
+                    withContext(Dispatchers.IO) {
+                        OnlineWebStoryViewAheadPreload.hasWebForwardPrefetchAnyRemainingForTopBar(
+                            storyLibrary,
+                            sidLoop,
+                        )
+                    }
+            }
+            if (!readerService.deferredFetchHasRemaining && !readerService.webForwardPrefetchHasRemaining) {
                 readerService.deferredFetchContinueEnabled = false
                 break
             }
@@ -1121,13 +1177,14 @@ fun AppTabs() {
             delay(120)
         }
         readerService.deferredFetchWorking = false
-        if (!readerService.deferredFetchHasRemaining) {
+        if (!readerService.deferredFetchHasRemaining && !readerService.webForwardPrefetchHasRemaining) {
             readerService.deferredFetchProgressLabel = ""
         }
     }
     LaunchedEffect(activeLibraryStoryId) {
         val sid = activeLibraryStoryId ?: run {
             readerService.deferredFetchHasRemaining = false
+            readerService.webForwardPrefetchHasRemaining = false
             readerService.deferredFetchContinueEnabled = false
             readerService.deferredFetchProgressLabel = ""
             return@LaunchedEffect
@@ -1141,6 +1198,13 @@ fun AppTabs() {
                 )
             }
         readerService.deferredFetchHasRemaining = result.hasSource && result.hasRemaining
+        readerService.webForwardPrefetchHasRemaining =
+            withContext(Dispatchers.IO) {
+                OnlineWebStoryViewAheadPreload.hasWebForwardPrefetchAnyRemainingForTopBar(
+                    storyLibrary,
+                    sid,
+                )
+            }
     }
     LaunchedEffect(tabIndex) {
         if (tabIndex != 1) return@LaunchedEffect
@@ -2321,18 +2385,6 @@ fun AppTabs() {
                             ?: canonicalTextFromRaw(text)
                     },
                 )
-            },
-            onReloadDeferredArchiveStory = { storyId ->
-                val did =
-                    withContext(Dispatchers.IO) {
-                        materializeDeferredStoryIfNeeded(
-                            storyLibrary,
-                            readerService,
-                            storyId,
-                            allowBackwardDeferredFill = true,
-                        )
-                    }
-                did
             },
             onOpenTextFileFromStorage = {
                 openTextDocumentLauncher.launch(

@@ -359,8 +359,8 @@ class StoryLibraryRepository(private val context: Context) {
     }
 
     /**
-     * Tạo thể loại online: [name] lưu URL đã chuẩn hóa (unique), [online_base_url] cùng giá trị;
-     * đồng thời tạo một truyện gốc với [online_page_url] = URL (dùng WebView / cấu hình sau).
+     * Tạo thể loại online: [name] và [online_base_url] đều là URL đã chuẩn hóa (unique theo tên);
+     * seed một chương với [online_page_url] = URL.
      * Trả về (id, url) để mở WebView.
      */
     fun insertOnlineLibraryCategory(userInput: String): Pair<Long, String> {

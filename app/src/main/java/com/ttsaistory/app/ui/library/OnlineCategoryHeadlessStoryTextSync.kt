@@ -10,6 +10,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.ttsaistory.app.data.StoryLibraryRepository
+import com.ttsaistory.app.domain.CHROME_MOBILE_WEB_USER_AGENT
 import com.ttsaistory.app.domain.canonicalTextFromRaw
 import com.ttsaistory.app.domain.ParagraphTextService
 import com.ttsaistory.app.ui.reader.ReaderService
@@ -105,8 +106,7 @@ object OnlineCategoryHeadlessStoryTextSync {
                     } else {
                         WebSettings.LOAD_DEFAULT
                     }
-                wv.settings.userAgentString =
-                    wv.settings.userAgentString + " TtsAiStoryWebCategory/1"
+                wv.settings.userAgentString = CHROME_MOBILE_WEB_USER_AGENT
                 wv.webChromeClient = WebChromeClient()
 
                 withTimeout<Unit>(timeMillis = 60_000L) {
