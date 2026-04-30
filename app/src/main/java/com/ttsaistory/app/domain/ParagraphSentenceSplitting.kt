@@ -646,6 +646,49 @@ object ParagraphSentenceSplitting {
         return if (sents.isEmpty()) listOf(t) else sents
     }
 
+    /**
+     * Một lượt: nếu câu kết bằng **một** dấu `.` (không phải `..`) và câu sau (trim đầu) bắt đầu bằng
+     * chữ cái **thường** thì bỏ dấu chấm cuối và gộp câu sau lên **không** chèn khoảng trắng giữa hai phần.
+     */
+    private fun mergeFlatSentencesDotThenLowercaseNext(sentences: List<String>): List<String> {
+        if (sentences.size < 2) return sentences
+        val out = mutableListOf<String>()
+        var i = 0
+        while (i < sentences.size) {
+            val cur = sentences[i]
+            if (i + 1 < sentences.size) {
+                val t = cur.trimEnd()
+                val endsSingleDot =
+                    t.length >= 2 &&
+                        t.endsWith('.') &&
+                        !t.endsWith("..")
+                if (endsSingleDot) {
+                    val next = sentences[i + 1]
+                    val nt = next.trimStart()
+                    val fc = nt.firstOrNull()
+                    if (fc != null && fc.isLetter() && fc.isLowerCase()) {
+                        val merged = t.dropLast(1).trimEnd() + nt
+                        out.add(merged)
+                        i += 2
+                        continue
+                    }
+                }
+            }
+            out.add(cur)
+            i++
+        }
+        return out
+    }
+
+    private fun mergeRepeatedlyDotLowercaseContinuation(sentences: List<String>): List<String> {
+        var cur = sentences
+        while (true) {
+            val next = mergeFlatSentencesDotThenLowercaseNext(cur)
+            if (next.size == cur.size) return next
+            cur = next
+        }
+    }
+
     fun parseStoredTextToFlatSentences(raw: String): List<String> {
         if (raw.isEmpty()) {
             val empty = listOf("")
@@ -674,7 +717,8 @@ object ParagraphSentenceSplitting {
                     }
                 }
             }
-        val result = if (flat.isEmpty()) listOf("") else flat
+        val mergedFlat = mergeRepeatedlyDotLowercaseContinuation(flat)
+        val result = if (mergedFlat.isEmpty()) listOf("") else mergedFlat
         return result
     }
 

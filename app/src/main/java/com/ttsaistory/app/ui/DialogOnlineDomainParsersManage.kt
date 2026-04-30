@@ -1,5 +1,8 @@
 package com.ttsaistory.app.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -19,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -39,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.ttsaistory.app.data.OnlineDomainParserRow
 import com.ttsaistory.app.data.StoryLibraryRepository
@@ -81,13 +86,19 @@ fun DialogOnlineDomainParsersManage(
     var editingRow by remember { mutableStateOf<OnlineDomainParserRow?>(null) }
     var editNextPageDraft by remember { mutableStateOf("") }
     var editContentDraft by remember { mutableStateOf("") }
+    /** JSON đồng bộ từ DB sau mỗi [listEpoch]; có thể chỉnh tay rồi «Áp dụng JSON». */
+    var jsonEditorDraft by remember { mutableStateOf("") }
+    /** Bật ô chỉnh JSON sau khi bấm «JSON edit». */
+    var showJsonEditor by remember { mutableStateOf(false) }
 
     LaunchedEffect(listEpoch) {
         loading = true
-        rows =
+        val loaded =
             withContext(Dispatchers.IO) {
                 runCatching { repository.listOnlineDomainParsers() }.getOrDefault(emptyList())
             }
+        rows = loaded
+        jsonEditorDraft = onlineDomainParsersToExportJson(loaded)
         loading = false
     }
 
@@ -173,7 +184,7 @@ fun DialogOnlineDomainParsersManage(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 520.dp)
+                        .heightIn(max = 620.dp)
                         .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -199,6 +210,102 @@ fun DialogOnlineDomainParsersManage(
                         enabled = activity != null,
                     ) {
                         Text("Nhập JSON")
+                    }
+                    TextButton(
+                        onClick = {
+                            if (!showJsonEditor) {
+                                jsonEditorDraft = onlineDomainParsersToExportJson(rows)
+                            }
+                            showJsonEditor = !showJsonEditor
+                        },
+                        enabled = !loading,
+                    ) {
+                        Text(if (showJsonEditor) "Ẩn JSON" else "JSON edit")
+                    }
+                    TextButton(
+                        onClick = {
+                            val cm =
+                                ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(
+                                ClipData.newPlainText("tts-online-parsers", jsonEditorDraft),
+                            )
+                            Toast.makeText(ctx, "Đã copy JSON", Toast.LENGTH_SHORT).show()
+                        },
+                        enabled = !loading && jsonEditorDraft.isNotBlank(),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Filled.ContentCopy,
+                                contentDescription = null,
+                                modifier = Modifier.padding(end = 6.dp),
+                            )
+                            Text("Copy JSON")
+                        }
+                    }
+                }
+                if (!loading && showJsonEditor) {
+                    Text(
+                        "JSON (chỉnh sửa, rồi «Áp dụng JSON» hoặc Copy)",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    OutlinedTextField(
+                        value = jsonEditorDraft,
+                        onValueChange = { jsonEditorDraft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle =
+                            MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        minLines = 8,
+                        maxLines = 18,
+                        singleLine = false,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        val entries =
+                                            withContext(Dispatchers.IO) {
+                                                parseOnlineDomainParsersImportJson(jsonEditorDraft)
+                                            }
+                                        if (entries.isEmpty()) {
+                                            Toast.makeText(
+                                                ctx,
+                                                "Không có parser hợp lệ trong JSON",
+                                                Toast.LENGTH_LONG,
+                                            ).show()
+                                            return@launch
+                                        }
+                                        withContext(Dispatchers.IO) {
+                                            for (e in entries) {
+                                                repository.upsertOnlineDomainParser(
+                                                    domainKey = e.domain,
+                                                    nextPageSelector = e.nextPageSelector,
+                                                    contentSelectors = e.contentSelectors,
+                                                )
+                                            }
+                                        }
+                                        Toast.makeText(
+                                            ctx,
+                                            "Đã áp dụng ${entries.size} parser",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                        listEpoch++
+                                        onParsersMutated()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(
+                                            ctx,
+                                            e.message ?: "Lỗi JSON",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                }
+                            },
+                        ) {
+                            Text("Áp dụng JSON")
+                        }
                     }
                 }
                 if (loading) {

@@ -41,7 +41,8 @@ object ParagraphTextService {
         chapterId: Long? = null,
         libraryRepository: StoryLibraryRepository? = null,
     ) {
-        val textNorm = text.replace("\r\n", "\n").replace('\r', '\n')
+        var textNorm = text.replace("\r\n", "\n").replace('\r', '\n')
+        
         val flat = parseStoredTextToSentences2(textNorm)
         val canonical = flat.joinToString("\n")
         _chapterParagraphs.value = flat
@@ -51,6 +52,19 @@ object ParagraphTextService {
         if (sid != null && sid > 0L && repo != null && canonical != textNorm) {
             repo.updateStoryTextIfExists(sid, canonical)
         }
+    }
+
+    /**
+     * Chuẩn hóa vài dạng che chữ (web) trước khi parse: `ch.` cùng dòng hoặc xuống dòng rồi `ết`
+     * (`. ` không ăn newline trong regex mặc định — dùng `[\r\n]*` giữa) → `chết`;
+     * `gi*t` / `ch*t` (dấu `*` thật) → `giết` / `chết`.
+     */
+    private fun normalizeCensorshipKillWords(text: String): String {
+        var s =
+            Regex("""(?i)ch\.\s*[\r\n]*\s*ết""").replace(text, "chết")
+        s = Regex("""(?i)gi\*t""").replace(s, "giết")
+        s = Regex("""(?i)ch\*t""").replace(s, "chết")
+        return s
     }
 
     private val parseStoredTextCacheLock = Any()
@@ -76,7 +90,9 @@ object ParagraphTextService {
 
     private fun parseStoredTextToSentences2(raw: String): List<String> {
         synchronized(parseStoredTextCacheLock) {
+           
             val cachedRaw = parseStoredTextCacheRaw
+
             val flat = parseStoredTextCacheSentences
             if (cachedRaw != null && flat != null && cachedRaw == raw) {
                 return flat
@@ -95,7 +111,8 @@ object ParagraphTextService {
         return resultFlat
     }
 
-    private fun parseStoredTextToSentencesUncached(raw: String): List<String> {
+    private fun parseStoredTextToSentencesUncached(araw: String): List<String> {
+        val raw = normalizeCensorshipKillWords(araw)
         val result = ParagraphSentenceSplitting.parseStoredTextToFlatSentences(raw)
         
         return result
