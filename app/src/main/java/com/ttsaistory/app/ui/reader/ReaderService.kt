@@ -227,11 +227,12 @@ class ReaderService(prefs: SharedPreferences) {
      * Parse [text] -> [chapterParagraphs]/[chapterText] và cập nhật [totalItemCount], [chapterLineCount].
      * Nếu có chapter thư viện thì chuẩn hóa lại file khi canonical khác raw.
      */
+    /** @return Chuỗi chuẩn sau parse (ô phẳng nối bằng `\n`). */
     fun setChapterText(
         text: String,
         chapterId: Long? = null,
         libraryRepository: StoryLibraryRepository? = null,
-    ) {
+    ): String {
         val textNorm = text.replace("\r\n", "\n").replace('\r', '\n')
         _chapterLineCount.value =
             if (textNorm.isEmpty()) {
@@ -249,6 +250,7 @@ class ReaderService(prefs: SharedPreferences) {
         if (sid != null && sid > 0L && repo != null && canonical != textNorm) {
             repo.updateStoryTextIfExists(sid, canonical)
         }
+        return canonical
     }
 
     fun snapshotChapterParagraphsForExport(): List<String> =

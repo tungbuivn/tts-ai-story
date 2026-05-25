@@ -57,7 +57,7 @@ import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.library.LibraryTab
 import com.ttsaistory.app.ui.reader.ExportM4aTopBarState
 import com.ttsaistory.app.ui.reader.MainBottomBar
-import com.ttsaistory.app.ui.reader.DialogReaderImeHideDelays
+import com.ttsaistory.app.ui.reader.ReaderSettingsScreen
 import com.ttsaistory.app.ui.reader.DialogReaderLibraryChapterLoading
 import com.ttsaistory.app.ui.reader.ReaderTab
 import com.ttsaistory.app.ui.reader.ReaderService
@@ -117,6 +117,8 @@ fun AppModalNavigationDrawerScaffold(
     onOpenStoryFromLibrary: suspend (Long) -> Boolean,
     /** Đọc lại nội dung chương từ DB (sau tách chương / đồng bộ file). */
     onReloadLibraryChapterTextFromDisk: suspend (Long) -> Unit,
+    /** Sau khi lưu màn hình cài đặt (IME + regex): cập nhật chuỗi tab Đọc & soạn theo canonical mới. */
+    onReaderSettingsSaved: (String) -> Unit,
     /** Mở file văn bản qua SAF (bộ nhớ / thẻ SD). */
     onOpenTextFileFromStorage: () -> Unit,
     /** Tab Thư viện: mở SAF chọn thư mục để import thành các chương trong một truyện. */
@@ -474,9 +476,16 @@ fun AppModalNavigationDrawerScaffold(
     }
 
     if (showReaderSettingsDialog) {
-        DialogReaderImeHideDelays(
-            onDismissRequest = { showReaderSettingsDialog = false },
+        ReaderSettingsScreen(
             prefs = prefs,
+            readerService = readerService,
+            storyLibrary = storyLibrary,
+            activeLibraryStoryId = activeLibraryStoryId,
+            chapterEditorTextForReparse = text,
+            onDismissRequest = { showReaderSettingsDialog = false },
+            onChapterCanonicalUpdated = { canon ->
+                onReaderSettingsSaved(canon)
+            },
         )
     }
 

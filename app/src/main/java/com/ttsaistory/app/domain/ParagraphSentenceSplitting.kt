@@ -689,6 +689,11 @@ object ParagraphSentenceSplitting {
         }
     }
 
+    /**
+     * Khi gọi từ [com.ttsaistory.app.domain.ParagraphTextService], [raw] đã qua
+     * [ParagraphTextService.fullPreprocessBeforeSplit] (LF, che chữ web, regex người dùng) — trước
+     * bước gộp dòng / tách câu bên dưới.
+     */
     fun parseStoredTextToFlatSentences(raw: String): List<String> {
         if (raw.isEmpty()) {
             val empty = listOf("")

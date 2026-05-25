@@ -38,6 +38,11 @@ object AppPreferenceKeys {
     const val KEY_READER_VIEW_SENTENCES_PER_PAGE = "reader_view_sentences_per_page"
     const val DEFAULT_READER_VIEW_SENTENCES_PER_PAGE = 50
 
+    /**
+     * JSON mảng các quy tắc `{ pattern, replacement, enabled }` — áp dụng trước khi gộp dòng / tách câu.
+     */
+    const val KEY_PRE_SPLIT_REGEX_RULES_JSON = "pre_split_regex_rules_json"
+
     const val DEFAULT_EDITOR_FONT_SCAN_DIR = "/storage/emulated/0/fonts"
 
     const val KEY_EDITOR_FONT_SCAN_DIR = "editor_font_scan_dir"

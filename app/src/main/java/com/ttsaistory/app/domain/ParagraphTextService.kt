@@ -1,6 +1,7 @@
 package com.ttsaistory.app.domain
 
 import com.ttsaistory.app.data.StoryLibraryRepository
+import com.ttsaistory.app.model.PreSplitRegexRulesStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,6 +68,27 @@ object ParagraphTextService {
         return s
     }
 
+    private fun normalizeLineEndingsForParse(s: String): String =
+        s.replace("\r\n", "\n").replace('\r', '\n')
+
+    /** LF + che chữ + [rulesOverride] — dùng khi thử regex trong cài đặt (chưa lưu prefs). */
+    fun previewFullPreprocess(araw: String, rulesOverride: List<PreSplitRegexReplacementRule>): String {
+        val normalized = normalizeLineEndingsForParse(araw)
+        val afterCensor = normalizeCensorshipKillWords(normalized)
+        return PreSplitRegexReplacements.applyRules(afterCensor, rulesOverride)
+    }
+
+    /** Chuẩn hoá LF + che chữ tích hợp + quy tắc regex người dùng — dùng trước mọi tách câu / ranh giới. */
+    fun fullPreprocessBeforeSplit(araw: String): String =
+        previewFullPreprocess(araw, PreSplitRegexRulesStore.rulesSnapshot())
+
+    fun invalidateStoredTextParseCache() {
+        synchronized(parseStoredTextCacheLock) {
+            parseStoredTextCacheRaw = null
+            parseStoredTextCacheSentences = null
+        }
+    }
+
     private val parseStoredTextCacheLock = Any()
     private var parseStoredTextCacheRaw: String? = null
     private var parseStoredTextCacheSentences: List<String>? = null
@@ -89,17 +111,16 @@ object ParagraphTextService {
         ParagraphSentenceSplitting.sentencesFromParagraphOrWhole(paragraph)
 
     private fun parseStoredTextToSentences2(raw: String): List<String> {
+        val pre = fullPreprocessBeforeSplit(raw)
         synchronized(parseStoredTextCacheLock) {
-           
             val cachedRaw = parseStoredTextCacheRaw
-
             val flat = parseStoredTextCacheSentences
-            if (cachedRaw != null && flat != null && cachedRaw == raw) {
+            if (cachedRaw != null && flat != null && cachedRaw == pre) {
                 return flat
             }
-            val resultFlat = parseStoredTextToSentencesUncached(raw)
+            val resultFlat = ParagraphSentenceSplitting.parseStoredTextToFlatSentences(pre)
             publishTotalItemCountFromFlat(resultFlat)
-            parseStoredTextCacheRaw = raw
+            parseStoredTextCacheRaw = pre
             parseStoredTextCacheSentences = resultFlat
             return resultFlat
         }
@@ -112,16 +133,14 @@ object ParagraphTextService {
     }
 
     private fun parseStoredTextToSentencesUncached(araw: String): List<String> {
-        val raw = normalizeCensorshipKillWords(araw)
-        val result = ParagraphSentenceSplitting.parseStoredTextToFlatSentences(raw)
-        
-        return result
+        val raw = fullPreprocessBeforeSplit(araw)
+        return ParagraphSentenceSplitting.parseStoredTextToFlatSentences(raw)
     }
 
     fun splitIntoFlatSentences(raw: String): List<String> = parseStoredTextToSentences(raw)
 
     fun flatSegmentCharRanges(raw: String): List<IntRange> =
-        ParagraphSentenceSplitting.flatSegmentCharRanges(raw)
+        ParagraphSentenceSplitting.flatSegmentCharRanges(fullPreprocessBeforeSplit(raw))
 
     /** Bỏ ô câu rỗng; bỏ hàng lưới không còn câu. */
     fun compactParagraphGroups(groups: List<List<String>>): List<List<String>> {
@@ -152,7 +171,8 @@ object ParagraphTextService {
     }
 
     fun canonicalTextFromRaw(raw: String): String {
-        val lines = splitFullTextIntoParagraphLines(raw)
+        val pre = fullPreprocessBeforeSplit(raw)
+        val lines = ParagraphSentenceSplitting.splitFullTextIntoParagraphLines(pre)
         if (lines.isEmpty()) return ""
         val groups =
             lines.map { line ->
@@ -164,8 +184,11 @@ object ParagraphTextService {
     }
 
     fun paragraphIndexAtCharOffset(raw: String, offset: Int): Int =
-        ParagraphSentenceSplitting.paragraphIndexAtCharOffset(raw, offset)
+        ParagraphSentenceSplitting.paragraphIndexAtCharOffset(fullPreprocessBeforeSplit(raw), offset)
 
     fun charOffsetForFlatParagraphIndex(text: String, paragraphIndex: Int): Int =
-        ParagraphSentenceSplitting.charOffsetForFlatParagraphIndex(text, paragraphIndex)
+        ParagraphSentenceSplitting.charOffsetForFlatParagraphIndex(
+            fullPreprocessBeforeSplit(text),
+            paragraphIndex,
+        )
 }

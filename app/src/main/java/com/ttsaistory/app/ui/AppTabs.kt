@@ -88,6 +88,7 @@ import com.ttsaistory.app.model.AppEditorConstants
 import com.ttsaistory.app.model.AppPreferenceKeys
 import com.ttsaistory.app.model.InboundLibraryPersistResult
 import com.ttsaistory.app.model.LibraryCategoryToolbarCommand
+import com.ttsaistory.app.model.PreSplitRegexRulesStore
 import com.ttsaistory.app.model.TextTabSpeechEngine
 import com.ttsaistory.app.ui.library.OpenFileProgressDialog
 import com.ttsaistory.app.ui.library.OpenFileProgressLogDialog
@@ -730,6 +731,9 @@ fun AppTabs() {
             context.applicationContext.getSharedPreferences(AppPreferenceKeys.PREF_NAME, Context.MODE_PRIVATE)
         }
     val readerService = remember(prefs) { ReaderService(prefs) }
+    LaunchedEffect(Unit) {
+        PreSplitRegexRulesStore.refreshFrom(prefs)
+    }
     var text by remember {
         mutableStateOf(
             canonicalTextFromRaw(prefs.getString(AppPreferenceKeys.KEY_LAST_TEXT, "") ?: ""),
@@ -1820,18 +1824,26 @@ fun AppTabs() {
         }
     }
 
-    val keepScreenOnForVoicePlayback =
-        systemTtsUtteranceDepth > 0 ||
-            systemTtsStoryUtterancesRemaining > 0 ||
-            (elevenLabsPlayJob?.isActive == true)
-    DisposableEffect(keepScreenOnForVoicePlayback) {
+    // Giữ màn hình sáng mọi lúc app ở foreground (kể cả không TTS), tắt khi thoát / chuyển app.
+    DisposableEffect(activity) {
         val window = activity.window
-        if (keepScreenOnForVoicePlayback) {
+        val lifecycle = activity.lifecycle
+        val observer =
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME ->
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    Lifecycle.Event.ON_PAUSE ->
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    else -> {}
+                }
+            }
+        lifecycle.addObserver(observer)
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
         onDispose {
+            lifecycle.removeObserver(observer)
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
@@ -2346,6 +2358,11 @@ fun AppTabs() {
                 prefs.saveLastText(text)
                 librarySyncEpoch++
                 libraryRefreshTrigger++
+            },
+            onReaderSettingsSaved = { canon ->
+                text = canon
+                prefs.saveLastText(canon)
+                librarySyncEpoch++
             },
             onLibraryDataChanged = { libraryRefreshTrigger++ },
             onSavedLibraryStoryFromEditor = { id ->
