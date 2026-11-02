@@ -2,7 +2,7 @@ package com.ttsaistory.app.speech
 
 import com.ttsaistory.app.model.TextTabSpeechEngine
 
-/** Chọn engine phát đoạn theo tab (TTS hệ thống / ElevenLabs). */
+/** Chọn engine phát đoạn theo tab (TTS hệ thống / ElevenLabs / VoxStudio). */
 object ParagraphSpeechEngines {
 
     /** Dừng mọi engine đã truyền vào (idempotent). */
@@ -14,9 +14,11 @@ object ParagraphSpeechEngines {
         type: TextTabSpeechEngine,
         system: ParagraphSpeechEngine,
         eleven: ParagraphSpeechEngine,
+        voxStudio: ParagraphSpeechEngine,
     ): ParagraphSpeechEngine =
         when (type) {
             TextTabSpeechEngine.System -> system
             TextTabSpeechEngine.ElevenLabs -> eleven
+            TextTabSpeechEngine.VoxStudio -> voxStudio
         }
 }

@@ -84,11 +84,11 @@ class ElevenLabsParagraphSpeechEngine(
                     if (activeJob === thisPlayJob) {
                         activeJob = null
                     }
-                    callbacks.onElevenLabsJob(null)
+                    callbacks.onRemoteTtsJob(null)
                 }
             }
         activeJob = elJob
-        callbacks.onElevenLabsJob(elJob)
+        callbacks.onRemoteTtsJob(elJob)
         return true
     }
 }

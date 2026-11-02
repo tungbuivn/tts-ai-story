@@ -3,6 +3,7 @@ package com.ttsaistory.app.model
 enum class TextTabSpeechEngine(val storageValue: String) {
     System("system"),
     ElevenLabs("elevenlabs"),
+    VoxStudio("voxstudio"),
     ;
 
     companion object {

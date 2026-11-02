@@ -8,7 +8,7 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 
 **TTS AI Story** giúp bạn:
 
-- **Đọc văn bản thành tiếng** bằng giọng **máy Android** hoặc giọng **ElevenLabs** (cần Internet và tài khoản/API key).
+- **Đọc văn bản thành tiếng** bằng giọng **máy Android**, **ElevenLabs** (cần Internet và API key) hoặc **VoxStudio** (server TTS self-hosted, có giọng clone).
 - **Soạn, dán hoặc mở** nội dung trên màn hình **Text**.
 - **Lưu truyện theo thể loại** trên màn hình **Thư viện** — thêm, đổi tên, sắp xếp, xóa, **nhập cả thư mục** từ máy, **nhập file .zip / .epub** (mở từ menu), **xuất** ra thư mục Tải xuống khi cần.
 - **Xuất file âm thanh** dạng **.m4a** (AAC) từ nội dung đang đọc (có thể hiện thông báo khi xuất).
@@ -31,6 +31,7 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 | **Mở file…** | Mở trình chọn file của Android (SAF). Bạn có thể chọn:<br>• **File văn bản** (`.txt`, v.v.) — mở vào app / lưu thư viện tùy luồng.<br>• **File .zip** — app giải nén và **nhập từng file văn** trong zip thành truyện trong một **thể loại** (tên thể loại thường theo tên file zip).<br>• **File .epub** — app đọc sách điện tử, **tách theo thứ tự chương** trong spine, ghi thành các truyện đánh số trong một thể loại.<br>Trong lúc xử lý **zip / epub** (và bước đầu mở file), có hộp thoại **Open file progress** (tiêu đề cố định) với dòng trạng thái và thanh chờ — **nên để app chạy xong** trước khi thoát hẳn. |
 | **Text** / **Thư viện** | Chuyển nhanh sang tab tương ứng. |
 | **Cấu hình ElevenLabs** | Nhập **API key**, chọn giọng/tùy chọn ElevenLabs. Cần **mạng**. |
+| **Cấu hình VoxStudio** | Nhập **Base URL** + **API token** của server TTS self-hosted; tải danh sách engine/giọng; chọn tốc độ/âm lượng; **thêm giọng clone từ file + đặt tên**. Cần mạng/Tailscale (hoặc cùng WiFi LAN). |
 | **Cấu hình TTS hệ thống** | Chọn **giọng đọc**, **tốc độ**, **cao độ** của TTS có sẵn trên máy. |
 | **Cấu hình Parser online** | Quản lý **parser theo domain** cho truyện web: thêm / sửa (chạm tên domain) / xóa; mỗi parser có **URL** (nhiều dòng, mỗi dòng một URL — app lấy **domain**), ô **Trang tiếp** và **Nội dung** (CSS selector, giống cấu hình web trước đây). Khi bạn **tạo thể loại bằng URL** trong Thư viện, app **tự gán** selector nếu domain đã có ở đây — **không** mở trình duyệt trong app để cấu hình. |
 | **Fonts** | Đổi **font chữ** vùng soạn trên tab Text (có thể chọn font từ máy nếu app hỗ trợ). |
@@ -48,16 +49,17 @@ Tài liệu này dành cho **người dùng cuối**: cách mở app, đọc tru
 
 ### 2. Chọn giọng đọc
 
-- Trên vùng Text có phần chọn **TTS hệ thống** hoặc **ElevenLabs** (chip lựa chọn).
+- Trên vùng Text có phần chọn **TTS hệ thống**, **ElevenLabs** hoặc **VoxStudio** (chip lựa chọn).
 - **Hệ thống:** không tốn API; dùng giọng đã cài trên máy (Google TTS, Samsung, v.v.).
 - **ElevenLabs:** giọng chất lượng cao hơn; cần cấu hình trong menu ☰ và **Internet**.
+- **VoxStudio:** server TTS tự dựng (pro400). Cần **Tailscale** (hoặc cùng WiFi nhà) và **API token**; mở **☰ → Cấu hình VoxStudio** để chọn engine/giọng. Có thể **thêm giọng clone**: chọn file mẫu 3–10 giây, đặt **tên giọng**, bấm **Tải lên**; giọng mới xuất hiện đầu danh sách và được chọn ngay.
 - Bên cạnh phần chọn engine có **icon danh sách** (☰ dạng list): mở **hộp thoại chọn truyện** trong **thể loại đang gắn** với truyện bạn mở (hoặc thể loại đầu tiên nếu chưa gắn truyện thư viện). Trong đó bạn có thể **lọc theo tên**, **chạm truyện để mở**, **đổi thứ tự** (mũi tên lên/xuống khi **không** bật lọc tên). Chạm **Đóng** hoặc ngoài vùng tùy hộp thoại để thoát.
 
 ### 3. Đọc và dừng
 
 - Dùng nút **Phát** / **Dừng** (và các nút liên quan) trên **thanh công cụ** phía trên vùng soạn.
 - Muốn chỉnh nhanh giọng/tốc độ: chạm **bánh răng** trên thanh trên (khi đang ở tab Text) — mở đúng màn hình cài đặt cho engine bạn đang chọn.
-- **Tắt màn hình khi đang đọc:** app cố gắng **giữ phần cứng đủ hoạt động** để TTS hoặc bản phát ElevenLabs **không bị cắt ngay** sau khi bạn tắt màn hình (Android vẫn có thể quản lý pin / chế độ tiết kiệm theo máy). Nếu đọc dài, bạn có thể **hạ độ sáng** thay vì tắt nguồn màn hình để an toàn hơn.
+- **Tắt màn hình khi đang đọc:** app cố gắng **giữ phần cứng đủ hoạt động** để TTS hoặc bản phát ElevenLabs/VoxStudio **không bị cắt ngay** sau khi bạn tắt màn hình (Android vẫn có thể quản lý pin / chế độ tiết kiệm theo máy). Nếu đọc dài, bạn có thể **hạ độ sáng** thay vì tắt nguồn màn hình để an toàn hơn.
 
 ### 4. Đoạn / câu
 
@@ -131,7 +133,7 @@ Nếu sau khi mở bạn **quay lại** app mà nội dung không bị nhập tr
 
 ## Quyền và dữ liệu (ngắn gọn)
 
-- **Internet:** bắt buộc nếu dùng ElevenLabs hoặc khi app cần tải nội dung từ liên kết.
+- **Internet:** bắt buộc nếu dùng ElevenLabs/VoxStudio hoặc khi app cần tải nội dung từ liên kết.
 - **Thông báo:** có thể được hỏi khi **xuất file âm thanh** chạy nền — nên **cho phép** để theo dõi tiến độ.
 - **WAKE_LOCK (giữ CPU khi đọc):** dùng để giảm tình trạng **đọc bị cắt** sau khi tắt màn hình; không bật màn hình thay bạn.
 - Truyện trong Thư viện được lưu **trong app**; muốn có bản trên máy dễ tìm (Máy tính / Tải xuống), hãy dùng **Xuất ra…** hoặc xuất từ menu thể loại như trên.
@@ -142,8 +144,9 @@ Nếu sau khi mở bạn **quay lại** app mà nội dung không bị nhập tr
 
 | Hiện tượng | Gợi ý |
 |------------|--------|
-| Không có tiếng | Kiểm tra **âm lượng máy**, đang chọn **TTS hệ thống** hay **ElevenLabs**, và trong menu ☰ mở **Cấu hình TTS** tương ứng xem đã chọn giọng chưa. |
+| Không có tiếng | Kiểm tra **âm lượng máy**, đang chọn **TTS hệ thống**, **ElevenLabs** hay **VoxStudio**, và trong menu ☰ mở **Cấu hình TTS** tương ứng xem đã chọn giọng chưa. |
 | ElevenLabs không đọc | Cần **mạng**, **API key đúng**, còn hạn mức tài khoản ElevenLabs. |
+| VoxStudio không đọc | Cần mạng/Tailscale hoặc cùng WiFi với pro400; kiểm tra **Base URL** và **API token** trong ☰ → Cấu hình VoxStudio. Nếu báo không phân giải tên, dùng `http://100.95.4.110` (Tailscale) hoặc `http://192.168.0.112` (LAN). |
 | Import thư mục trống | Thư mục cần có **file văn bản** (txt, v.v.) mà app đọc được; thử thư mục khác hoặc kiểm tra định dạng file. |
 | Mở zip / epub báo lỗi | File có thể **hỏng**, **không phải zip/epub**, **epub có mã hóa** (DRM) — app không hỗ trợ; thử file khác. Zip cần chứa **file văn** app đọc được sau khi giải nén. |
 | Đồng bộ thư mục báo lỗi / không chạy | Thư mục gốc có thể đã **đổi tên / di chuyển** hoặc Android **thu hồi quyền** — thử **Nhập thư mục** lại cho thể loại mới. |

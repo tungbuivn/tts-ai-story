@@ -108,7 +108,7 @@ internal fun ReaderParagraphSplitSentenceLazyGrid(
     speakingParagraphIndex: Int,
     dbLastSpeechSentenceIndex0: Int,
     systemTtsPlaybackActive: Boolean,
-    elevenLabsJobActive: Boolean,
+    remoteTtsJobActive: Boolean,
     /** true khi đang phát — ẩn viền cam «chọn ô» (theo [ReaderService.isPlaying]). */
     voicePlaybackActive: Boolean,
     paragraphSplitMode: Boolean,
@@ -174,7 +174,7 @@ internal fun ReaderParagraphSplitSentenceLazyGrid(
                     !localSelectedBorder &&
                     speakingParagraphIndex < 0 &&
                     !systemTtsPlaybackActive &&
-                    !elevenLabsJobActive &&
+                    !remoteTtsJobActive &&
                     dbLastSpeechSentenceIndex0 >= 0 &&
                     ttsStartAtCell == dbLastSpeechSentenceIndex0
             val paraForEdit =

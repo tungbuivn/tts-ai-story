@@ -57,6 +57,12 @@ internal fun ReaderSpeechEngineRow(
                 enabled = engineControlsEnabled,
                 label = { Text("ElevenLabs") },
             )
+            FilterChip(
+                selected = speechEngine == TextTabSpeechEngine.VoxStudio,
+                onClick = { onSpeechEngineChange(TextTabSpeechEngine.VoxStudio) },
+                enabled = engineControlsEnabled,
+                label = { Text("VoxStudio") },
+            )
         }
         IconButton(
             onClick = onOpenLibraryStoryPicker,

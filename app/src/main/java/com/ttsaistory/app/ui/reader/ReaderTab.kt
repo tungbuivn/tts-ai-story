@@ -165,7 +165,7 @@ fun ReaderTab(
     speechEngine: TextTabSpeechEngine,
     onSpeechEngineChange: (TextTabSpeechEngine) -> Unit,
     speechEngineReady: Boolean,
-    elevenLabsJobActive: Boolean,
+    remoteTtsJobActive: Boolean,
     /** true khi TTS hệ thống còn utterance trong loạt đọc — không dùng [TextToSpeech.isSpeaking] (dễ lệch / không recompose). */
     systemTtsPlaybackActive: Boolean,
     onStopAllSpeechReading: () -> Unit,
@@ -526,7 +526,7 @@ fun ReaderTab(
     val readerVoicePlaybackActive =
         speakingParagraphIndex >= 0 ||
             (speechEngine == TextTabSpeechEngine.System && systemTtsPlaybackActive) ||
-            (speechEngine == TextTabSpeechEngine.ElevenLabs && elevenLabsJobActive)
+            (speechEngine != TextTabSpeechEngine.System && remoteTtsJobActive)
     SideEffect {
         readerService.isPlaying = readerVoicePlaybackActive
     }
@@ -1033,7 +1033,7 @@ fun ReaderTab(
                         textEditorChromeViewOnly &&
                         speakingParagraphIndex < 0 &&
                         !(speechEngine == TextTabSpeechEngine.System && systemTtsPlaybackActive) &&
-                        !(speechEngine == TextTabSpeechEngine.ElevenLabs && elevenLabsJobActive) &&
+                        !(speechEngine != TextTabSpeechEngine.System && remoteTtsJobActive) &&
                         (paragraphToolbarTtsTotal ?: 0) > 0,
             ),
         )
@@ -1052,7 +1052,7 @@ fun ReaderTab(
     }
     val latestFlatItemCount by rememberUpdatedState(flatItemCount)
     val latestSystemTtsPlaybackActive by rememberUpdatedState(systemTtsPlaybackActive)
-    val latestElevenLabsJobActive by rememberUpdatedState(elevenLabsJobActive)
+    val latestRemoteTtsJobActive by rememberUpdatedState(remoteTtsJobActive)
     val latestOnPlayParagraphs by rememberUpdatedState(onPlayParagraphs)
     var showPlayChoiceMenu by remember { mutableStateOf(false) }
     var playChoiceParagraphs by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -1417,7 +1417,7 @@ fun ReaderTab(
                     val wasPlaying =
                         latestSpeakingParagraphIndex >= 0 ||
                             latestSystemTtsPlaybackActive ||
-                            latestElevenLabsJobActive
+                            latestRemoteTtsJobActive
                     if (readerService.paragraphSplitMode && wasPlaying) {
                         val groups = gl.map { r -> r.map { it.text } }
                         val merged = mergeParagraphGridToStoredText(groups)
@@ -2008,7 +2008,7 @@ fun ReaderTab(
                                     speechEngine == TextTabSpeechEngine.System &&
                                         systemTtsPlaybackActive
                                 ) ||
-                                (speechEngine == TextTabSpeechEngine.ElevenLabs && elevenLabsJobActive)
+                                (speechEngine != TextTabSpeechEngine.System && remoteTtsJobActive)
                         if (wasPlaying) {
                             onStopAllSpeechReading()
                         }
@@ -2084,11 +2084,11 @@ fun ReaderTab(
                             speechEngine == TextTabSpeechEngine.System &&
                                 systemTtsPlaybackActive
                         ) &&
-                        !(speechEngine == TextTabSpeechEngine.ElevenLabs && elevenLabsJobActive),
+                        !(speechEngine != TextTabSpeechEngine.System && remoteTtsJobActive),
                 onStopSpeechClick = { onStopAllSpeechReading() },
                 stopSpeechEnabled =
                     (speechEngine == TextTabSpeechEngine.System && systemTtsPlaybackActive) ||
-                        (speechEngine == TextTabSpeechEngine.ElevenLabs && elevenLabsJobActive) ||
+                        (speechEngine != TextTabSpeechEngine.System && remoteTtsJobActive) ||
                         speakingParagraphIndex >= 0,
                 showReloadWebContent = activeStoryHasWebUrl,
                 onReloadWebContentClick = {
@@ -2767,7 +2767,7 @@ fun ReaderTab(
                 speakingParagraphIndex = speakingParagraphIndex,
                 dbLastSpeechSentenceIndex0 = dbLastSpeechSentenceIndex0,
                 systemTtsPlaybackActive = systemTtsPlaybackActive,
-                elevenLabsJobActive = elevenLabsJobActive,
+                remoteTtsJobActive = remoteTtsJobActive,
                 voicePlaybackActive = readerVoicePlaybackActive,
                 paragraphSplitMode = readerService.paragraphSplitMode,
                 focusedParagraphIndex = readerSplitFlatFocusIndex,

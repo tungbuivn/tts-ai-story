@@ -51,7 +51,7 @@ fun DialogAppAbout(onDismissRequest: () -> Unit) {
                 )
                 Text(
                     text =
-                        "Soạn và đọc văn bản bằng TTS hệ thống hoặc ElevenLabs; thư viện gồm các truyện, mỗi truyện có nhiều chương; " +
+                        "Soạn và đọc văn bản bằng TTS hệ thống, ElevenLabs hoặc VoxStudio (server self-hosted); thư viện gồm các truyện, mỗi truyện có nhiều chương; " +
                             "nhập thư mục từ bộ nhớ; đồng bộ / làm mới nội dung truyện web khi cần.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = scheme.onSurface,

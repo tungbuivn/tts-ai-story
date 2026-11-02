@@ -65,6 +65,8 @@ fun MainBottomBar(
     systemTtsPlaybackActive: Boolean,
     /** WPM ước lượng; null trong câu đầu chưa có câu nào đọc xong. */
     systemTtsMeasuredWpm: Int?,
+    /** Engine remote (VoxStudio) đang chờ tổng hợp/đệm audio. */
+    remoteTtsPreparing: Boolean,
 ) {
     val paragraphServiceTotal by readerService.totalItemCount.collectAsState(initial = null)
     val navBridge = readerBottomNavBridge
@@ -138,6 +140,9 @@ fun MainBottomBar(
             }
             val statusLine =
                 when {
+                    remoteTtsPreparing && tabIndex == 0 ->
+                        withWebQueueStoryIdSuffix("Đang tổng hợp audio…")
+
                     progressStillLoading ->
                         withWebQueueStoryIdSuffix("Đang tính tiến độ…")
 

@@ -2,10 +2,10 @@
 
 **Người dùng cuối:** xem [USER_GUIDE.md](USER_GUIDE.md) — hướng dẫn từng bước, không cần kiến thức lập trình.
 
-Ứng dụng Android đọc văn bản bằng **TTS** (giọng hệ thống hoặc **ElevenLabs**), soạn/ghi nhớ nội dung và quản lý **thư viện truyện** theo thể loại — có **import thư mục** từ bộ nhớ (SAF), **mở file .zip / .epub** (nhập thư viện), xuất văn bản (**.txt**, **.zip**, **.epub**) / xuất **file âm thanh AAC (.m4a)**. Chi tiết thao tác: [USER_GUIDE.md](USER_GUIDE.md).
+Ứng dụng Android đọc văn bản bằng **TTS** (giọng hệ thống, **ElevenLabs** hoặc **VoxStudio** self-hosted), soạn/ghi nhớ nội dung và quản lý **thư viện truyện** theo thể loại — có **import thư mục** từ bộ nhớ (SAF), **mở file .zip / .epub** (nhập thư viện), xuất văn bản (**.txt**, **.zip**, **.epub**) / xuất **file âm thanh AAC (.m4a)**. Chi tiết thao tác: [USER_GUIDE.md](USER_GUIDE.md).
 
 - **Package:** `com.ttsaistory.app`
-- **minSdk / targetSdk:** 26 / 35 (xem `app/build.gradle.kts`).
+- **minSdk / targetSdk:** 26 / 36 (xem `app/build.gradle.kts`).
 
 ---
 
@@ -28,6 +28,7 @@ Mở bằng nút **☰** trên thanh trên.
 | **Mở file…** | SAF: **.txt** (văn bản), **.zip** (giải nén + nhập từng file văn), **.epub** (chương theo spine → thư viện). Zip/epub dùng dialog **Open file progress** trong lúc xử lý. |
 | **Text** / **Thư viện** | Chuyển nhanh giữa hai tab. |
 | **Cấu hình ElevenLabs** | API key và tùy chọn dùng giọng ElevenLabs (cần Internet). |
+| **Cấu hình VoxStudio** | Server TTS self-hosted (pro400): Base URL, Bearer token, engine/giọng, tốc độ/âm lượng, **thêm giọng clone từ file + đặt tên**. Trên tab Text, chọn chip **VoxStudio** để dùng. |
 | **Cấu hình TTS hệ thống** | Giọng, tốc độ, cao độ Android TTS. |
 | **Cấu hình Parser online** | Quản lý **parser theo domain** (URL nhiều dòng → domain; «Trang tiếp» / «Nội dung» giống cấu hình selector web). Khi tạo **thể loại online bằng URL**, app khớp **domain** của URL với bảng này để gán selector cho thể loại — **không** mở WebView cấu hình. |
 | **Fonts** | Cấu hình font vùng soạn (tab Text). |
@@ -38,14 +39,30 @@ Mở bằng nút **☰** trên thanh trên.
 ## Tab **Text**
 
 - **Soạn văn:** nhập hoặc dán nội dung; app có thể tách **đoạn / câu** để đọc TTS tuần tự (theo chế độ đang bật trên thanh công cụ soạn).
-- **Chọn engine đọc:** **TTS hệ thống** hoặc **ElevenLabs** (segment trên vùng soạn / toolbar — đổi engine sẽ ảnh hưởng luồng đọc).
+- **Chọn engine đọc:** **TTS hệ thống**, **ElevenLabs** hoặc **VoxStudio** (segment trên vùng soạn / toolbar — đổi engine sẽ ảnh hưởng luồng đọc).
 - **Danh sách truyện (icon list):** chọn truyện khác trong cùng thể loại, lọc tên, đổi thứ tự (khi không lọc).
 - **Phát / dừng đọc:** dùng các nút điều khiển trên toolbar vùng Text (Play, dừng toàn bộ, v.v.). Khi tắt màn hình, app dùng **wake lock** để giảm khả năng bị cắt giữa chừng (tùy OEM / pin).
-- **Cài đặt nhanh:** nút **bánh răng** trên top bar khi đang ở tab Text — mở cấu hình TTS tương ứng engine đang chọn (hệ thống / ElevenLabs).
+- **Cài đặt nhanh:** nút **bánh răng** trên top bar khi đang ở tab Text — mở cấu hình TTS tương ứng engine đang chọn (hệ thống / ElevenLabs / VoxStudio).
 - **Xuất âm thanh AAC (.m4a):** trên toolbar có thao tác xuất TTS sang file **.m4a** (tiến trình có thể chạy nền với thông báo; chi tiết trong UI dialog xuất).
 - **Thanh dưới:** nhảy đoạn đầu/cuối, đoạn trước/sau, hiển thị chỉ số câu/đoạn đang đọc và tổng số (khi đã tính xong).
 
 **Truyện đang mở từ thư viện:** khi mở một truyện từ tab Thư viện, tab Text hiển thị nội dung file thư viện; chỉnh sửa có thể được đồng bộ ghi lại vào file truyện (autosave theo debounce của app).
+
+---
+
+## Engine **VoxStudio** (TTS self-hosted trên pro400)
+
+App gọi **REST API** của VoxStudio (`/api/engines`, `/api/jobs`, `/api/voices`) — không phụ thuộc code Python trên máy khách.
+
+1. Cài **Tailscale** trên điện thoại, đăng nhập cùng tài khoản và bật **MagicDNS** (hoặc dùng IP `http://100.95.4.110`).
+2. Mở **☰ → Cấu hình VoxStudio**; nhập **API token** (lấy trên server tại `data/.api_token`).
+3. Bấm **Lưu & tải danh sách** → chọn **engine** (mặc định **VieNeu**) và **giọng**.
+4. Ở tab Text chọn chip **VoxStudio** rồi bấm Phát.
+
+- **Thêm giọng clone:** trong Cấu hình VoxStudio → **Thêm giọng từ file…** → chọn file `wav/mp3/m4a/ogg/flac/webm` ≤ 15 MB, dài 1–40 giây → đặt **tên giọng** (2–60 ký tự) → **Tải lên**. Giọng clone thuộc engine VieNeu, xuất hiện đầu danh sách (🎙) và được chọn ngay.
+- **Xoá giọng clone:** nút thùng rác cạnh giọng clone.
+- **Tốc độ / âm lượng** do server xử lý (`rate_pct` −50…100, `volume_pct` 0…200); VieNeu bỏ qua cao độ.
+- App tạo **job bất đồng bộ** cho từng câu/đoạn, poll trạng thái rồi tải MP3; có **prefetch câu kế** để giảm khoảng lặng.
 
 ---
 

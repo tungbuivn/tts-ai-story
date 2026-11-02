@@ -94,7 +94,7 @@ class SystemParagraphSpeechEngine(
             }
         }
         callbacks.onSystemQueuedUtteranceCount(jobs.size)
-        callbacks.onElevenLabsJob(null)
+        callbacks.onRemoteTtsJob(null)
         return true
     }
 

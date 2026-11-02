@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -52,6 +53,7 @@ import com.ttsaistory.app.data.StoryLibraryRepository
 import com.ttsaistory.app.elevenlabs.ElevenLabsPrefKeys
 import com.ttsaistory.app.model.LibraryCategoryToolbarCommand
 import com.ttsaistory.app.model.TextTabSpeechEngine
+import com.ttsaistory.app.voxstudio.VoxStudioPrefKeys
 import com.ttsaistory.app.ui.DialogOnlineDomainParsersManage
 import com.ttsaistory.app.ui.library.OpenFileProgressUi
 import com.ttsaistory.app.ui.library.LibraryTab
@@ -75,6 +77,7 @@ fun AppModalNavigationDrawerScaffold(
     tabIndex: Int,
     onTabIndexChange: (Int) -> Unit,
     onOpenElevenLabsFromDrawer: () -> Unit,
+    onOpenVoxStudioFromDrawer: () -> Unit,
     onOpenSystemTtsFromDrawer: () -> Unit,
     onNavigateLibraryToolbar: (LibraryCategoryToolbarCommand) -> Unit,
     onTopBarTextSettingsClick: () -> Unit,
@@ -94,7 +97,9 @@ fun AppModalNavigationDrawerScaffold(
     librarySyncEpoch: Int,
     tts: TextToSpeech?,
     ttsReady: Boolean,
-    elevenLabsPlayJob: Job?,
+    remoteTtsPlayJob: Job?,
+    /** Engine remote đang đệm/tổng hợp audio trước khi phát. */
+    remoteTtsPreparing: Boolean,
     /** Loạt đọc TTS hệ thống còn utterance (không dùng [TextToSpeech.isSpeaking] cho nút Play). */
     systemTtsPlaybackActive: Boolean,
     /** WPM ước lượng từ thời gian phát thực tế; null khi chưa đủ dữ liệu (câu đầu). */
@@ -231,6 +236,22 @@ fun AppModalNavigationDrawerScaffold(
                 NavigationDrawerItem(
                     icon = {
                         Icon(
+                            Icons.Filled.Cloud,
+                            contentDescription = null,
+                        )
+                    },
+                    label = { Text("Cấu hình VoxStudio") },
+                    selected = false,
+                    onClick = {
+                        coroutineScope.launch {
+                            drawerState.close()
+                            onOpenVoxStudioFromDrawer()
+                        }
+                    },
+                )
+                NavigationDrawerItem(
+                    icon = {
+                        Icon(
                             Icons.Filled.RecordVoiceOver,
                             contentDescription = null,
                         )
@@ -335,6 +356,7 @@ fun AppModalNavigationDrawerScaffold(
                     textTabSpeechEngine = textTabSpeechEngine,
                     systemTtsPlaybackActive = systemTtsPlaybackActive,
                     systemTtsMeasuredWpm = systemTtsMeasuredWpm,
+                    remoteTtsPreparing = remoteTtsPreparing,
                 )
             },
         ) { innerPadding ->
@@ -410,8 +432,10 @@ fun AppModalNavigationDrawerScaffold(
                                         TextTabSpeechEngine.System -> ttsReady && tts != null
                                         TextTabSpeechEngine.ElevenLabs ->
                                             ElevenLabsPrefKeys.resolveApiKey(prefs).isNotEmpty()
+                                        TextTabSpeechEngine.VoxStudio ->
+                                            VoxStudioPrefKeys.isConfigured(prefs)
                                     },
-                                elevenLabsJobActive = elevenLabsPlayJob?.isActive == true,
+                                remoteTtsJobActive = remoteTtsPlayJob?.isActive == true,
                                 systemTtsPlaybackActive = systemTtsPlaybackActive,
                                 onStopAllSpeechReading = onStopAllSpeechReading,
                                 onPlayParagraphs = onPlayParagraphs,

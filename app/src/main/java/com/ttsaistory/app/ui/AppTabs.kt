@@ -107,6 +107,9 @@ import com.ttsaistory.app.speech.ParagraphSpeechEngines
 import com.ttsaistory.app.speech.ParagraphSpeechSequenceCallbacks
 import com.ttsaistory.app.speech.SystemParagraphSpeechEngine
 import com.ttsaistory.app.speech.SystemTtsUtteranceProgressSink
+import com.ttsaistory.app.speech.VoxStudioParagraphSpeechEngine
+import com.ttsaistory.app.voxstudio.VoxStudioPrefKeys
+import com.ttsaistory.app.voxstudio.VoxStudioSettingsScreen
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -719,6 +722,7 @@ fun AppTabs() {
     // --- Trạng thái tab, thư viện, tiến độ nhập tệp ---
     var tabIndex by remember { mutableIntStateOf(0) }
     var elevenLabsSettingsVisible by remember { mutableStateOf(false) }
+    var voxStudioSettingsVisible by remember { mutableStateOf(false) }
     var systemTtsSettingsVisible by remember { mutableStateOf(false) }
     var showEditorFontConfigDialog by remember { mutableStateOf(false) }
     var editorFontConfigOpenSession by remember { mutableIntStateOf(0) }
@@ -1239,7 +1243,8 @@ fun AppTabs() {
             TextTabSpeechEngine.fromStorage(prefs.getString(AppPreferenceKeys.KEY_TEXT_TAB_SPEECH_ENGINE, null)),
         )
     }
-    var elevenLabsPlayJob by remember { mutableStateOf<Job?>(null) }
+    var remoteTtsPlayJob by remember { mutableStateOf<Job?>(null) }
+    var remoteTtsPreparing by remember { mutableStateOf(false) }
     val latestTextTabSpeechEngine by rememberUpdatedState(textTabSpeechEngine)
 
     // --- Intent SEND / VIEW / PROCESS_TEXT → thư viện ---
@@ -1803,7 +1808,7 @@ fun AppTabs() {
     val voicePlaybackNeedsWakeLock =
         systemTtsUtteranceDepth > 0 ||
             systemTtsStoryUtterancesRemaining > 0 ||
-            (elevenLabsPlayJob?.isActive == true)
+            (remoteTtsPlayJob?.isActive == true)
     LaunchedEffect(voicePlaybackNeedsWakeLock) {
         if (!voicePlaybackNeedsWakeLock) return@LaunchedEffect
         val app = activity.applicationContext
@@ -1915,6 +1920,14 @@ fun AppTabs() {
                 scope = coroutineScope,
             )
         }
+    val voxStudioParagraphSpeechEngine =
+        remember(context, prefs, coroutineScope) {
+            VoxStudioParagraphSpeechEngine(
+                appContext = context.applicationContext,
+                prefs = prefs,
+                scope = coroutineScope,
+            )
+        }
 
     fun stopAllSpeechReading(persistBookmarkOnStop: Boolean = true) {
         systemTtsStoryUtterancesRemaining = 0
@@ -1928,9 +1941,11 @@ fun AppTabs() {
         ParagraphSpeechEngines.stopAll(
             systemParagraphSpeechEngine,
             elevenParagraphSpeechEngine,
+            voxStudioParagraphSpeechEngine,
         )
         systemTtsUtteranceDepth = 0
-        elevenLabsPlayJob = null
+        remoteTtsPlayJob = null
+        remoteTtsPreparing = false
         speakingParagraphIndex = -1
     }
 
@@ -1981,7 +1996,7 @@ fun AppTabs() {
 
     DisposableEffect(Unit) {
         onDispose {
-            elevenLabsPlayJob?.cancel()
+            remoteTtsPlayJob?.cancel()
             abandonSystemTtsAudioFocus()
         }
     }
@@ -2000,14 +2015,19 @@ fun AppTabs() {
                 onSpeakingParagraphIndex = { speakingParagraphIndex = it },
                 onErrorToast = { msg ->
                     val len =
-                        if (msg.startsWith("ElevenLabs")) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                        if (msg.startsWith("ElevenLabs") || msg.startsWith("VoxStudio")) {
+                            Toast.LENGTH_LONG
+                        } else {
+                            Toast.LENGTH_SHORT
+                        }
                     Toast.makeText(context, msg, len).show()
                 },
                 onSystemQueuedUtteranceCount = { systemTtsStoryUtterancesRemaining = it },
-                onElevenLabsJob = { elevenLabsPlayJob = it },
+                onRemoteTtsJob = { remoteTtsPlayJob = it },
+                onRemoteTtsPreparing = { remoteTtsPreparing = it },
                 onFullSequenceFinishedForLibraryAutoAdvance = {
                     if (latestActiveLibraryStoryId != null &&
-                        latestTextTabSpeechEngine == TextTabSpeechEngine.ElevenLabs
+                        latestTextTabSpeechEngine != TextTabSpeechEngine.System
                     ) {
                         libraryStoryAutoAdvanceHook.run()
                     }
@@ -2018,6 +2038,7 @@ fun AppTabs() {
                 textTabSpeechEngine,
                 systemParagraphSpeechEngine,
                 elevenParagraphSpeechEngine,
+                voxStudioParagraphSpeechEngine,
             )
             .startParagraphSequence(paragraphs, startIndex, speechCallbacks)
     }
@@ -2254,8 +2275,21 @@ fun AppTabs() {
             coroutineScope = coroutineScope,
             tabIndex = tabIndex,
             onTabIndexChange = { tabIndex = it },
-            onOpenElevenLabsFromDrawer = { elevenLabsSettingsVisible = true },
-            onOpenSystemTtsFromDrawer = { systemTtsSettingsVisible = true },
+            onOpenElevenLabsFromDrawer = {
+                voxStudioSettingsVisible = false
+                systemTtsSettingsVisible = false
+                elevenLabsSettingsVisible = true
+            },
+            onOpenVoxStudioFromDrawer = {
+                elevenLabsSettingsVisible = false
+                systemTtsSettingsVisible = false
+                voxStudioSettingsVisible = true
+            },
+            onOpenSystemTtsFromDrawer = {
+                elevenLabsSettingsVisible = false
+                voxStudioSettingsVisible = false
+                systemTtsSettingsVisible = true
+            },
             onNavigateLibraryToolbar = { cmd ->
                 tabIndex = 1
                 libraryToolbarCommand = cmd
@@ -2263,12 +2297,19 @@ fun AppTabs() {
             onTopBarTextSettingsClick = {
                 when (textTabSpeechEngine) {
                     TextTabSpeechEngine.System -> {
+                        voxStudioSettingsVisible = false
                         elevenLabsSettingsVisible = false
                         systemTtsSettingsVisible = true
                     }
                     TextTabSpeechEngine.ElevenLabs -> {
+                        voxStudioSettingsVisible = false
                         systemTtsSettingsVisible = false
                         elevenLabsSettingsVisible = true
+                    }
+                    TextTabSpeechEngine.VoxStudio -> {
+                        elevenLabsSettingsVisible = false
+                        systemTtsSettingsVisible = false
+                        voxStudioSettingsVisible = true
                     }
                 }
             },
@@ -2291,7 +2332,8 @@ fun AppTabs() {
             librarySyncEpoch = librarySyncEpoch,
             tts = tts,
             ttsReady = ttsReady,
-            elevenLabsPlayJob = elevenLabsPlayJob,
+            remoteTtsPlayJob = remoteTtsPlayJob,
+            remoteTtsPreparing = remoteTtsPreparing,
             systemTtsPlaybackActive = systemTtsPlaybackActive,
             systemTtsMeasuredWpm = systemTtsMeasuredWpm,
             onEditorTextChange = { newText ->
@@ -2473,6 +2515,21 @@ fun AppTabs() {
             ElevenLabsSettingsScreen(
                 prefs = prefs,
                 onClose = { elevenLabsSettingsVisible = false },
+            )
+        }
+    }
+    if (voxStudioSettingsVisible) {
+        Surface(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .zIndex(4f),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp,
+        ) {
+            VoxStudioSettingsScreen(
+                prefs = prefs,
+                onClose = { voxStudioSettingsVisible = false },
             )
         }
     }

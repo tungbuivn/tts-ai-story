@@ -150,6 +150,8 @@ internal fun AppMainTopAppBar(
                                     "Cấu hình TTS hệ thống"
                                 TextTabSpeechEngine.ElevenLabs ->
                                     "Cấu hình ElevenLabs"
+                                TextTabSpeechEngine.VoxStudio ->
+                                    "Cấu hình VoxStudio"
                             },
                     )
                 }
